@@ -58,8 +58,8 @@ with conn.cursor() as cursor:
 
 ## Documentation
 
-- [GitHub Wiki](https://github.com/JustyBase/nzpy_extended/wiki)
-- [Issue tracker](https://github.com/JustyBase/nzpy_extended/issues)
+- [GitHub Wiki](https://github.com/KrzysztofDusko/nzpy_extended/wiki)
+- [Issue tracker](https://github.com/KrzysztofDusko/nzpy_extended/issues)
 
 ## Testing
 

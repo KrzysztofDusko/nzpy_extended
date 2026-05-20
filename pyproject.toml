@@ -32,9 +32,9 @@ dependencies = [
 keywords = ["Netezza", "nps", "db-api", "dbapi", "driver", "async", "ibm-netezza", "postgresql", "extended"]
 
 [project.urls]
-Documentation = "https://github.com/JustyBase/nzpy_extended/wiki"
-Source = "https://github.com/JustyBase/nzpy_extended"
-Tracker = "https://github.com/JustyBase/nzpy_extended/issues"
+Documentation = "https://github.com/KrzysztofDusko/nzpy_extended/wiki"
+Source = "https://github.com/KrzysztofDusko/nzpy_extended"
+Tracker = "https://github.com/KrzysztofDusko/nzpy_extended/issues"
 
 [tool.setuptools.packages.find]
 include = ["nzpy_extended*"]
