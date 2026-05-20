@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=64", "wheel", "looseversion>=1.3.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nzpy_extended"
+dynamic = ["version"]
+description = "IBM Netezza python driver - extended fork"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+authors = [
+    {name = "krzysztof-d"},
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Operating System :: OS Independent",
+    "Topic :: Database :: Front-Ends",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "scramp>=1.4.5",
+    "looseversion>=1.3.0",
+]
+keywords = ["Netezza", "nps", "db-api", "dbapi", "driver", "async", "ibm-netezza", "postgresql", "extended"]
+
+[project.urls]
+Documentation = "https://github.com/JustyBase/nzpy_extended/wiki"
+Source = "https://github.com/JustyBase/nzpy_extended"
+Tracker = "https://github.com/JustyBase/nzpy_extended/issues"
+
+[tool.setuptools.packages.find]
+include = ["nzpy_extended*"]
