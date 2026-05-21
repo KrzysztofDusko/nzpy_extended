@@ -6,12 +6,23 @@
 
 | Feature | nzpy (IBM) | nzpy_extended |
 |---|---|---|
-| Row parsing performance | ~13 000 rows/s (pure Python) | ~50 000 rows/s (optimized Python) → ~200 000 rows/s (+ C ext, exceeds ODBC ~160 k) |
+| Row parsing performance (mixed types) | ~4 800 rows/s | ~37 000 rows/s (no C ext) → ~51 000 rows/s (+ C ext, on par with ODBC ~50 k) |
 | Supported Python | 3.5+ | **3.12, 3.13, 3.14** |
 | Platform wheels | ❌ None | ✅ Linux x64, macOS ARM, Windows x64 (pre-built) |
 | Async support | ❌ | ✅ Fully async API |
 
-A large portion of the speedup comes from avoiding unnecessary object allocations in pure Python (~13 k → ~50 k rows/s). When the C extension is available (`_HAVE_C_EXT = True`), parsing of integers, floats, decimals, dates, times, timestamps, booleans, and strings all happen in native C — avoiding Python object allocations per field and `struct.unpack` overhead — boosting throughput to ~200 k rows/s.
+Performance gains vary by data type. For mixed-type workloads (most representative of real-world queries), nzpy_extended reaches **~51 000 rows/s with C extension** (vs. ~4 800 rows/s for official nzpy — a **~10.7×** improvement) and **~37 000 rows/s without C extension** (~7.7× improvement). Per-type benchmarks with 100 k rows:
+
+| Data type | official nzpy | nzpy_extended (no C ext) | nzpy_extended (+ C ext) | vs. ODBC |
+|---|---|---|---|---|
+| INTEGER | ~16 k rows/s | ~200 k rows/s | **~281 k rows/s** | ≈ ODBC (~283 k) |
+| NUMERIC | ~8 k rows/s | ~73 k rows/s | **~109 k rows/s** | ≈ ODBC (~106 k) |
+| STRING | ~18 k rows/s | ~94 k rows/s | **~96 k rows/s** | ≈ ODBC (~96 k) |
+| DATETIME | ~17 k rows/s | ~122 k rows/s | **~274 k rows/s** | ≈ ODBC (~273 k) |
+| BOOLEAN | ~22 k rows/s | ~235 k rows/s | **~433 k rows/s** | ≈ ODBC (~435 k) |
+| Mixed | ~4 800 rows/s | ~37 k rows/s | **~51 k rows/s** | ≈ ODBC (~50 k) |
+
+The C extension accelerates integer, decimal, datetime, and boolean parsing by avoiding Python object allocations per field and `struct.unpack` overhead. String parsing is primarily network-bound, so the C extension offers minimal benefit there.
 
 If the compiled extension is not available (unsupported platform or Python version), the driver **gracefully falls back** to pure Python with identical semantics.
 
@@ -31,24 +42,61 @@ Pre-built wheels are provided for:
 
 For other platforms or Python versions, `pip install` will compile the C extension from source (requires a C compiler: GCC, Clang, or MSVC). On systems without a compiler the install will fail — use a supported platform or version.
 
-## Quick start
+## Quick Start
+
+### Sync — scripts, ETL, Jupyter, Django
 
 ```python
-import nzpy_extended as nzpy
+import nzpy_extended.sync as nzpy
 
 conn = nzpy.connect(
-    user="admin", password="password",
-    host="localhost", port=5480, database="db1",
-    securityLevel=1,
+    user="admin", password="secret",
+    host="netezza-host", database="mydb",
+)
+with conn.cursor() as cur:
+    cur.execute("SELECT id, name FROM users WHERE active = ?", (1,))
+    for row in cur:
+        print(row)
+```
+
+### Async — FastAPI, asyncio
+
+```python
+import asyncio
+import nzpy_extended as nzpy
+
+async def main():
+    async with await nzpy.connect(
+        user="admin", password="secret",
+        host="netezza-host", database="mydb",
+    ) as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT id, name FROM users WHERE active = ?", (1,))
+            return await cur.fetchall()
+
+asyncio.run(main())
+```
+
+### FastAPI with connection pool
+
+```python
+from fastapi import FastAPI, Depends
+import nzpy_extended as nzpy
+import nzpy_extended.fastapi as nzpy_fastapi
+
+pool = nzpy.NzPool(
+    min_size=2, max_size=10,
+    host="netezza-host", database="mydb",
+    user="admin", password="secret",
 )
 
-with conn.cursor() as cursor:
-    cursor.execute("CREATE TABLE IF NOT EXISTS test (id INT, name VARCHAR(50))")
-    cursor.execute("INSERT INTO test VALUES (?, ?)", (1, "Alice"))
-    cursor.execute("SELECT * FROM test")
-    rows = cursor.fetchall()
-    for row in rows:
-        print(row)
+app = FastAPI(lifespan=nzpy_fastapi.lifespan(pool))
+
+@app.get("/users")
+async def get_users(conn=Depends(nzpy_fastapi.get_connection)):
+    async with conn.cursor() as cur:
+        await cur.execute("SELECT * FROM users LIMIT 100")
+        return await cur.fetchall()
 ```
 
 ## Requirements

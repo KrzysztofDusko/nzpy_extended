@@ -9,7 +9,14 @@ from nzpy_extended.core import (ArrayContentNotHomogenousError,
                        PGText, PGTsvector, PGVarchar, ProgrammingError,
                        Time, TimeFromTicks, Timestamp, TimestampFromTicks,
                        Warning)
-from nzpy_extended.pool import NzPool
+from nzpy_extended.pool import AsyncNullPool, NullPool, NzPool, SyncPool
+
+from . import sync
+
+try:
+    from . import fastapi as fastapi
+except ImportError:
+    fastapi = None  # fastapi package not installed — optional integration
 
 from ._version import get_versions
 
@@ -18,19 +25,25 @@ del get_versions
 
 __author__ = "Mathieu Fenniak"
 
-async def connect(user, host='localhost', unix_sock=None, port=5432, database=None,
+async def connect(user, host='localhost', unix_sock=None, port=5480, database=None,
             password=None, ssl=None, securityLevel=0, timeout=None,
             application_name=None, max_prepared_statements=1000,
             datestyle='ISO', logLevel=0, tcp_keepalive=True,
             char_varchar_encoding='latin', logOptions=LogOptions.Inherit,
-            pgOptions=None):
+            pgOptions=None, on_connect=None, ssl_verify=True,
+            connect_timeout=None):
 
     conn = Connection()
     await conn._connect(user, host, unix_sock, port, database, password, ssl,
                       securityLevel, timeout, application_name,
                       max_prepared_statements, datestyle, logLevel,
                       tcp_keepalive, char_varchar_encoding,
-                      logOptions, pgOptions)
+                      logOptions, pgOptions, ssl_verify=ssl_verify,
+                      connect_timeout=connect_timeout)
+    if on_connect is not None:
+        result = on_connect(conn)
+        if hasattr(result, '__await__'):
+            await result
     return conn
 
 
@@ -72,13 +85,16 @@ ROWID = 26
 """ROWID type oid"""
 
 __all__ = [
-    Warning, DataError, DatabaseError, connect, InterfaceError,
-    ProgrammingError, Error, OperationalError, IntegrityError, InternalError,
-    NotSupportedError, ArrayContentNotHomogenousError,
-    ArrayDimensionsNotConsistentError, ArrayContentNotSupportedError,
-    Connection, Cursor, Binary, Date, DateFromTicks, Time, TimeFromTicks,
-    Timestamp, TimestampFromTicks, BINARY, Interval, PGEnum, PGJson, PGJsonb,
-    PGTsvector, PGText, PGVarchar]
+    "Warning", "DataError", "DatabaseError", "connect", "InterfaceError",
+    "ProgrammingError", "Error", "OperationalError", "IntegrityError", "InternalError",
+    "NotSupportedError", "ArrayContentNotHomogenousError",
+    "ArrayDimensionsNotConsistentError", "ArrayContentNotSupportedError",
+    "Connection", "Cursor", "Binary", "Date", "DateFromTicks", "Time", "TimeFromTicks",
+    "Timestamp", "TimestampFromTicks", "BINARY", "Interval", "PGEnum", "PGJson", "PGJsonb",
+    "PGTsvector", "PGText", "PGVarchar",
+    "NzPool", "SyncPool", "NullPool", "AsyncNullPool",
+    "sync",
+]
 
 """Version string for nzpy_extended.
     .. versionadded:: 1.9.11

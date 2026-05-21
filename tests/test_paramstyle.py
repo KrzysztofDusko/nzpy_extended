@@ -1,7 +1,7 @@
 import pytest
 from nzpy_extended.core import convert_paramstyle as convert
 
-pytestmark = pytest.mark.full
+pytestmark = [pytest.mark.full, pytest.mark.unit]
 
 # Tests of the convert_paramstyle function.
 
@@ -11,8 +11,8 @@ def test_qmark():
     new_query, make_args = convert(
         "qmark", "SELECT ?, ?, \"field_?\" FROM t "
         "WHERE a='say ''what?''' AND b=? AND c=E'?\\'test\\'?'")
-    expected = "SELECT NULL, NULL, \"field_?\" FROM t WHERE " \
-        "a='say ''what?''' AND b=NULL AND c=E'?\\'test\\'?'"
+    expected = "SELECT $1, $2, \"field_?\" FROM t WHERE " \
+        "a='say ''what?''' AND b=$3 AND c=E'?\\'test\\'?'"
     assert new_query == expected
     assert make_args((1, 2, 3)) == (1, 2, 3)
 
@@ -20,7 +20,7 @@ def test_qmark():
 def test_qmark_2():
     new_query, make_args = convert(
         "qmark", "SELECT ?, ?, * FROM t WHERE a=? AND b='are you ''sure?'")
-    expected = "SELECT NULL, NULL, * FROM t WHERE a=NULL AND " \
+    expected = "SELECT $1, $2, * FROM t WHERE a=$3 AND " \
                "b='are you ''sure?'"
     assert new_query == expected
     assert make_args((1, 2, 3)) == (1, 2, 3)
@@ -62,7 +62,6 @@ def test_format_multiline():
     assert new_query == "SELECT -- Comment\n$1 FROM t"
 
 
-'''
 def test_named():
     new_query, make_args = convert(
         "named",
@@ -70,6 +69,8 @@ def test_named():
     expected = "SELECT sum(x)::decimal(5, 2) $1, $2 FROM t WHERE a=$1"
     assert new_query == expected
     assert make_args({"f_2": 1, "f1": 2}) == (1, 2)
+
+
 def test_py_format():
     new_query, make_args = convert(
         "pyformat", "SELECT %(f2)s, %(f1)s, \"f1_%%\", E'txt_%%' "
@@ -84,6 +85,5 @@ def test_py_format():
         "FROM t WHERE a=%s AND b='75%%'")
     expected = "SELECT $1, $2, \"f1_%%\", E'txt_%%' FROM t WHERE a=$3 AND " \
         "b='75%%'"
-    assert new_query, expected
+    assert new_query == expected
     assert make_args((1, 2, 3)) == (1, 2, 3)
-'''

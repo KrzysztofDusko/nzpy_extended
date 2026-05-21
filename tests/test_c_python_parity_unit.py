@@ -27,7 +27,7 @@ try:
 except ImportError:
     _HAVE_C_EXT = False
 
-pytestmark = pytest.mark.full
+pytestmark = [pytest.mark.full, pytest.mark.unit]
 
 # ---------------------------------------------------------------------------
 # Pure-Python reference implementations (mirror c_ext.c identically)

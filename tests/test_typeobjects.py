@@ -3,7 +3,7 @@ import unittest
 import pytest
 from nzpy_extended import Interval
 
-pytestmark = pytest.mark.full
+pytestmark = [pytest.mark.full, pytest.mark.unit]
 
 # Type conversion tests
 class Tests(unittest.TestCase):

@@ -6,6 +6,7 @@ import getpass
 import logging
 import logging.handlers
 import platform
+import re
 import socket
 import asyncio
 import struct
@@ -425,137 +426,264 @@ FC_BINARY = 1
 
 
 def convert_paramstyle(style, query):
-    # I don't see any way to avoid scanning the query string char by char,
-    # so we might as well take that careful approach and create a
-    # state-based scanner.  We'll use int variables for the state.
-    OUTSIDE = 0  # outside quoted string
-    INSIDE_SQ = 1  # inside single-quote string '...'
-    INSIDE_QI = 2  # inside quoted identifier   "..."
-    INSIDE_ES = 3  # inside escaped single-quote string, E'...'
-    INSIDE_PN = 4  # inside parameter name eg. :name
-    INSIDE_CO = 5  # inside inline comment eg. --
+    OUTSIDE = 0
+    INSIDE_SQ = 1
+    INSIDE_QI = 2
+    INSIDE_ES = 3
+    INSIDE_CO = 4
 
-    in_quote_escape = False
-    in_param_escape = False
-    placeholders = []
     output_query = []
-    param_idx = map(lambda x: "$" + str(x), count(1))
     state = OUTSIDE
     prev_c = None
-    for i, c in enumerate(query):
-        if i + 1 < len(query):
-            next_c = query[i + 1]
-        else:
-            next_c = None
+    i = 0
+    positional_count = 0
+    ordered_names = []
+    name_to_index = {}
+
+    def remember_name(name):
+        if name not in name_to_index:
+            name_to_index[name] = len(ordered_names) + 1
+            ordered_names.append(name)
+        return name_to_index[name]
+
+    while i < len(query):
+        c = query[i]
+        next_c = query[i + 1] if i + 1 < len(query) else None
 
         if state == OUTSIDE:
             if c == "'":
                 output_query.append(c)
-                if prev_c == 'E':
-                    state = INSIDE_ES
-                else:
-                    state = INSIDE_SQ
-            elif c == '"':
+                state = INSIDE_ES if prev_c == 'E' else INSIDE_SQ
+                prev_c = c
+                i += 1
+                continue
+            if c == '"':
                 output_query.append(c)
                 state = INSIDE_QI
-            elif c == '-':
-                output_query.append(c)
-                if prev_c == '-':
-                    state = INSIDE_CO
-            elif style == "qmark" and c == "?":
-                output_query.append("NULL")
-            elif style == "numeric" and c == ":" and next_c is not None and next_c not in (':', '=') \
-                    and prev_c != ':':
-                # Treat : as beginning of parameter name if and only
-                # if it's the only : around
-                # Needed to properly process type conversions
-                # i.e. sum(x)::float
-                output_query.append("$")
-            elif style == "named" and c == ":" and next_c is not None and next_c not in (':', '=') \
-                    and prev_c != ':':
-                # Same logic for : as in numeric parameters
-                state = INSIDE_PN
-                placeholders.append('')
-            elif style == "pyformat" and c == '%' and next_c == "(":
-                state = INSIDE_PN
-                placeholders.append('')
-            elif style in ("format", "pyformat") and c == "%":
-                style = "format"
-                if in_param_escape:
-                    in_param_escape = False
-                    output_query.append(c)
-                else:
-                    if next_c == "%":
-                        in_param_escape = True
-                    elif next_c == "s":
-                        state = INSIDE_PN
-                        output_query.append(next(param_idx))
-                    else:
-                        raise InterfaceError(
-                            "Only %s and %% are supported in the query.")
-            else:
-                output_query.append(c)
+                prev_c = c
+                i += 1
+                continue
+            if c == '-' and next_c == '-':
+                output_query.extend((c, next_c))
+                state = INSIDE_CO
+                prev_c = next_c
+                i += 2
+                continue
+            if style == "qmark" and c == "?":
+                positional_count += 1
+                output_query.append(f"${positional_count}")
+                prev_c = c
+                i += 1
+                continue
+            if style == "numeric" and c == ":" and next_c is not None and next_c.isdigit() and prev_c != ":":
+                j = i + 1
+                while j < len(query) and query[j].isdigit():
+                    j += 1
+                output_query.append("$" + query[i + 1:j])
+                prev_c = query[j - 1]
+                i = j
+                continue
+            if style == "named" and c == ":" and next_c is not None and (next_c.isalpha() or next_c == "_") and prev_c != ":":
+                j = i + 1
+                while j < len(query) and (query[j].isalnum() or query[j] == "_"):
+                    j += 1
+                name = query[i + 1:j]
+                output_query.append(f"${remember_name(name)}")
+                prev_c = query[j - 1]
+                i = j
+                continue
+            if style == "pyformat" and c == "%" and next_c == "(":
+                j = i + 2
+                while j < len(query) and (query[j].isalnum() or query[j] == "_"):
+                    j += 1
+                name = query[i + 2:j]
+                if not name or j + 1 >= len(query) or query[j] != ")" or query[j + 1] != "s":
+                    raise InterfaceError("Only %(name)s and %% are supported in the query.")
+                output_query.append(f"${remember_name(name)}")
+                prev_c = "s"
+                i = j + 2
+                continue
+            if style in ("format", "pyformat") and c == "%":
+                if next_c == "%":
+                    output_query.extend((c, next_c))
+                    prev_c = next_c
+                    i += 2
+                    continue
+                if next_c == "s":
+                    positional_count += 1
+                    output_query.append(f"${positional_count}")
+                    prev_c = next_c
+                    i += 2
+                    continue
+                raise InterfaceError("Only %s and %% are supported in the query.")
+
+            output_query.append(c)
 
         elif state == INSIDE_SQ:
-            if c == "'":
-                if in_quote_escape:
-                    in_quote_escape = False
-                else:
-                    if next_c == "'":
-                        in_quote_escape = True
-                    else:
-                        state = OUTSIDE
             output_query.append(c)
+            if c == "'":
+                if next_c == "'":
+                    output_query.append(next_c)
+                    prev_c = next_c
+                    i += 2
+                    continue
+                state = OUTSIDE
 
         elif state == INSIDE_QI:
+            output_query.append(c)
             if c == '"':
                 state = OUTSIDE
-            output_query.append(c)
 
         elif state == INSIDE_ES:
-            if c == "'" and prev_c != "\\":
-                # check for escaped single-quote
-                state = OUTSIDE
             output_query.append(c)
-
-        elif state == INSIDE_PN:
-            if style == 'named':
-                placeholders[-1] += c
-                if next_c is None or (not next_c.isalnum() and next_c != '_'):
-                    state = OUTSIDE
-                    try:
-                        pidx = placeholders.index(placeholders[-1], 0, -1)
-                        output_query.append("$" + str(pidx + 1))
-                        del placeholders[-1]
-                    except ValueError:
-                        output_query.append("$" + str(len(placeholders)))
-            elif style == 'pyformat':
-                if prev_c == ')' and c == "s":
-                    state = OUTSIDE
-                    try:
-                        pidx = placeholders.index(placeholders[-1], 0, -1)
-                        output_query.append("$" + str(pidx + 1))
-                        del placeholders[-1]
-                    except ValueError:
-                        output_query.append("$" + str(len(placeholders)))
-                elif c in "()":
-                    pass
-                else:
-                    placeholders[-1] += c
-            elif style == 'format':
+            if c == "'" and prev_c != "\\":
                 state = OUTSIDE
 
         elif state == INSIDE_CO:
             output_query.append(c)
-            if c == '\n':
+            if c == "\n":
                 state = OUTSIDE
 
         prev_c = c
+        i += 1
 
     def make_args(vals):
-        return vals
+        if vals is None:
+            return ()
+        if style in ("named", "pyformat") and ordered_names:
+            try:
+                return tuple(vals[name] for name in ordered_names)
+            except KeyError as exc:
+                raise ProgrammingError(f"Missing value for parameter '{exc.args[0]}'") from exc
+            except TypeError as exc:
+                raise ProgrammingError("Named parameters require a mapping.") from exc
+        if isinstance(vals, tuple):
+            return vals
+        if isinstance(vals, list):
+            return tuple(vals)
+        if isinstance(vals, dict):
+            raise ProgrammingError("Positional parameters require a sequence, not a mapping.")
+        try:
+            return tuple(vals)
+        except TypeError:
+            return (vals,)
 
     return ''.join(output_query), make_args
+
+
+def _quote_text_literal(value):
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _sql_literal(value):
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, (int, Decimal)) and not isinstance(value, bool):
+        return str(value)
+    if isinstance(value, float):
+        return repr(value)
+    if isinstance(value, Datetime):
+        return _quote_text_literal(value.isoformat(sep=" "))
+    if isinstance(value, date):
+        return _quote_text_literal(value.isoformat())
+    if isinstance(value, time):
+        return _quote_text_literal(value.isoformat())
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return f"x'{bytes(value).hex()}'"
+    if isinstance(value, UUID):
+        return _quote_text_literal(str(value))
+    if isinstance(value, enum.Enum):
+        return _quote_text_literal(str(value.value))
+    if isinstance(value, dict):
+        return _quote_text_literal(dumps(value))
+    if isinstance(value, (list, tuple)):
+        return "ARRAY[" + ", ".join(_sql_literal(item) for item in value) + "]"
+    return _quote_text_literal(str(value))
+
+
+def _render_prepared_statement(statement, args):
+    OUTSIDE = 0
+    INSIDE_SQ = 1
+    INSIDE_QI = 2
+    INSIDE_ES = 3
+    INSIDE_CO = 4
+
+    output_query = []
+    state = OUTSIDE
+    prev_c = None
+    i = 0
+    max_index = 0
+
+    while i < len(statement):
+        c = statement[i]
+        next_c = statement[i + 1] if i + 1 < len(statement) else None
+
+        if state == OUTSIDE:
+            if c == "'":
+                output_query.append(c)
+                state = INSIDE_ES if prev_c == 'E' else INSIDE_SQ
+                prev_c = c
+                i += 1
+                continue
+            if c == '"':
+                output_query.append(c)
+                state = INSIDE_QI
+                prev_c = c
+                i += 1
+                continue
+            if c == '-' and next_c == '-':
+                output_query.extend((c, next_c))
+                state = INSIDE_CO
+                prev_c = next_c
+                i += 2
+                continue
+            if c == "$" and next_c is not None and next_c.isdigit():
+                j = i + 1
+                while j < len(statement) and statement[j].isdigit():
+                    j += 1
+                param_index = int(statement[i + 1:j])
+                if param_index <= 0 or param_index > len(args):
+                    raise ProgrammingError(
+                        f"Statement requires parameter ${param_index}, but only {len(args)} values were supplied."
+                    )
+                max_index = max(max_index, param_index)
+                output_query.append(_sql_literal(args[param_index - 1]))
+                prev_c = statement[j - 1]
+                i = j
+                continue
+            output_query.append(c)
+
+        elif state == INSIDE_SQ:
+            output_query.append(c)
+            if c == "'":
+                if next_c == "'":
+                    output_query.append(next_c)
+                    prev_c = next_c
+                    i += 2
+                    continue
+                state = OUTSIDE
+
+        elif state == INSIDE_QI:
+            output_query.append(c)
+            if c == '"':
+                state = OUTSIDE
+
+        elif state == INSIDE_ES:
+            output_query.append(c)
+            if c == "'" and prev_c != "\\":
+                state = OUTSIDE
+
+        elif state == INSIDE_CO:
+            output_query.append(c)
+            if c == "\n":
+                state = OUTSIDE
+
+        prev_c = c
+        i += 1
+
+    return ''.join(output_query), max_index
 
 
 EPOCH = Datetime(2000, 1, 1)
@@ -784,29 +912,18 @@ def timestamp_in(data, offset, length):
 def timestamptz_in(data, offset, length):
     s = data[offset:offset + length].decode('utf-8')
     try:
-        if ' ' in s:
-            parts = s.split('.')
-            base = parts[0]
-            microseconds = int(parts[1][:6].ljust(6, '0')) if len(parts) > 1 else 0
-            # Strip timezone suffix (e.g., +00:00, -05, UTC)
-            dt_str = base
-            plus_idx = base.find('+', 10)
-            minus_idx = base.find('-', 10)
-            tz_idx = None
-            if plus_idx >= 0:
-                tz_idx = plus_idx
-            elif minus_idx >= 0:
-                tz_idx = minus_idx
-            if tz_idx is not None:
-                dt_str = base[:tz_idx]
-            elif base.endswith(' UTC'):
-                dt_str = base[:-4]
-            elif base.endswith(' utc'):
-                dt_str = base[:-4]
-            dt_parts = dt_str.replace('-', ' ').replace(':', ' ').split()
-            return Datetime(int(dt_parts[0]), int(dt_parts[1]), int(dt_parts[2]),
-                          int(dt_parts[3]), int(dt_parts[4]), int(dt_parts[5]), microseconds)
-        return Datetime(int(s[:4]), int(s[5:7]), int(s[8:10]), 0, 0, 0)
+        text = s.strip()
+        if ' ' not in text:
+            return Datetime(int(text[:4]), int(text[5:7]), int(text[8:10]), 0, 0, 0)
+
+        if text.endswith((' UTC', ' utc')):
+            text = text[:-4] + '+00:00'
+        text = re.sub(r'([+-]\d{2})$', r'\1:00', text)
+        text = re.sub(r'([+-]\d{2})(\d{2})$', r'\1:\2', text)
+        value = Datetime.fromisoformat(text.replace(' ', 'T', 1))
+        if value.tzinfo is None:
+            return value
+        return value.astimezone(Timezone.utc)
     except (ValueError, IndexError):
         return s
 
@@ -1307,7 +1424,6 @@ STATEMENT = b'S'
 PORTAL = b'P'
 
 # ErrorResponse codes
-RESPONSE_SEVERITY = "S"  # always present
 RESPONSE_SEVERITY = "V"  # always present
 RESPONSE_CODE = "C"  # always present
 RESPONSE_MSG = "M"  # always present
@@ -1472,6 +1588,16 @@ class Connection():
         return self
 
     async def __aexit__(self, exc_type, exc_value, traceback):
+        if exc_type:
+            try:
+                await self.rollback()
+            except Exception:
+                pass
+        else:
+            try:
+                await self.commit()
+            except Exception:
+                pass
         try:
             await self.close()
         except ConnectionClosedError:
@@ -1506,7 +1632,7 @@ class Connection():
             securityLevel, timeout, application_name,
             max_prepared_statements, datestyle, logLevel, tcp_keepalive,
             char_varchar_encoding, logOptions=LogOptions.Inherit,
-            pgOptions=None):
+            pgOptions=None, ssl_verify=True, connect_timeout=None):
         self._char_varchar_encoding = char_varchar_encoding
         self._client_encoding = "utf8"
         self._commands_with_count = (
@@ -1532,7 +1658,8 @@ class Connection():
         # if no logging has been setup by the caller,
         # and no filename is specified
         # then come up with a file name
-        self.log = logging.getLogger("nzpy_extended.Connection["+database+"}]")
+        database_name = database if database is not None else "<default>"
+        self.log = logging.getLogger(f"nzpy_extended.Connection[{database_name}]")
         self.log.setLevel(logLevel)
 
         if logOptions & LogOptions.Logfile:
@@ -1583,15 +1710,20 @@ class Connection():
             else:
                 raise ProgrammingError(
                     "one of host or unix_sock must be provided")
-            if timeout is not None:
-                self._usock.settimeout(timeout)
+            sock_timeout = connect_timeout if connect_timeout is not None else timeout
 
             self._usock.setblocking(False)
             loop = asyncio.get_event_loop()
             if unix_sock is None and host is not None:
-                await loop.sock_connect(self._usock, (host, port))
+                connect_coro = loop.sock_connect(self._usock, (host, port))
             elif unix_sock is not None:
-                await loop.sock_connect(self._usock, unix_sock)
+                connect_coro = loop.sock_connect(self._usock, unix_sock)
+            else:
+                connect_coro = None
+            if sock_timeout is not None and connect_coro is not None:
+                await asyncio.wait_for(connect_coro, timeout=sock_timeout)
+            elif connect_coro is not None:
+                await connect_coro
 
             if tcp_keepalive:
                 self._usock.setsockopt(
@@ -1600,51 +1732,40 @@ class Connection():
             self._usock.close()
             raise InterfaceError("communication error", e)
 
-        if hasattr(asyncio, 'to_thread'):
-            self._usock.setblocking(True)
-            hs = handshake.SyncHandshake(self._usock, ssl, self.log)
-            self._usock = await asyncio.to_thread(
-                hs.startup, database, securityLevel,
-                user, password, pgOptions)
-            if self._usock is False:
-                raise ProgrammingError("Error in handshake")
-            self._backend_pid = hs.backend_pid
-            self._backend_key = hs.backend_key
-            self._usock.setblocking(False)
-
-            self._stream = NzBufferedStream(self._usock)
-
-            async def _read(n):
-                return await self._stream.read(n)
-
-            async def _write(data):
-                await self._stream.write(data)
-
-            async def _flush():
-                pass
-
-            self._read = _read
-            self._write = _write
-            self._flush = _flush
-            self._backend_key_data = None
-            self._dirty_socket = False
+        self._usock.setblocking(True)
+        if not isinstance(ssl, dict):
+            hs_ssl = {}
         else:
-            self._stream = NzBufferedStream(self._usock)
+            hs_ssl = dict(ssl)
+        hs_ssl.setdefault('ssl_verify', ssl_verify)
+        hs = handshake.SyncHandshake(self._usock, hs_ssl, self.log)
+        if application_name:
+            hs.guardium_applName = application_name
+        self._usock = await asyncio.to_thread(
+            hs.startup, database, securityLevel,
+            user, password, pgOptions)
+        if self._usock is False:
+            raise ProgrammingError("Error in handshake")
+        self._backend_pid = hs.backend_pid
+        self._backend_key = hs.backend_key
+        self._usock.setblocking(False)
 
-            async def _read(n):
-                return await self._stream.read(n)
+        self._stream = NzBufferedStream(self._usock)
 
-            async def _write(data):
-                await self._stream.write(data)
+        async def _read(n):
+            return await self._stream.read(n)
 
-            async def _flush():
-                pass
+        async def _write(data):
+            await self._stream.write(data)
 
-            self._read = _read
-            self._write = _write
-            self._flush = _flush
-            self._backend_key_data = None
-            self._dirty_socket = False
+        async def _flush():
+            pass
+
+        self._read = _read
+        self._write = _write
+        self._flush = _flush
+        self._backend_key_data = None
+        self._dirty_socket = False
 
         def text_out(v):
             return v.encode(self._client_encoding)
@@ -1955,26 +2076,6 @@ class Connection():
             COPY_IN_RESPONSE: self.handle_COPY_IN_RESPONSE,
             COPY_OUT_RESPONSE: self.handle_COPY_OUT_RESPONSE}
 
-        if not hasattr(asyncio, 'to_thread'):
-            hs = handshake.Handshake(self._stream, ssl, self.log)
-            response = await hs.startup(database, securityLevel,
-                                  user, password, pgOptions)
-
-            if response is not False:
-                if response is True: # Legacy or success bool
-                    pass
-                else:
-                    # Handshake returned the final reader/writer stream
-                    # We need to update our internal stream reference in case it changed (SSL)
-                    self._stream = response
-                    self._read = self._stream.read
-                    self._write = self._stream.write
-                    
-                self._backend_pid = hs.backend_pid
-                self._backend_key = hs.backend_key
-            else:
-                raise ProgrammingError("Error in handshake")
-
         self._cursor = self.cursor()
         #  code = self.error = None
         self.error = None
@@ -1985,7 +2086,7 @@ class Connection():
         self.commandNumber = 0
 
         if self.error is not None:
-            raise ProgrammingError(self.error)
+            raise self.error
 
         self.in_transaction = False
         # Drain the 4 trailing bytes from the final READY_FOR_QUERY
@@ -2000,11 +2101,17 @@ class Connection():
                 s[1:].decode(self._client_encoding)) for s in
             data.split(NULL_BYTE) if s != b'')
 
-        response_code = msg[RESPONSE_CODE]
+        response_code = msg.get(RESPONSE_CODE, '')
         if response_code == '28000':
             cls = InterfaceError
         elif response_code == '23505':
             cls = IntegrityError
+        elif response_code.startswith('08'):
+            cls = OperationalError
+        elif response_code.startswith('22'):
+            cls = DataError
+        elif response_code.startswith('26'):
+            cls = InternalError
         else:
             cls = ProgrammingError
 
@@ -2050,7 +2157,7 @@ class Connection():
                 "An output stream is required for the COPY OUT response.")
 
     async def handle_COPY_DATA(self, data, ps):
-        ps.stream.write(data)
+        await asyncio.to_thread(ps.stream.write, data)
 
     async def handle_COPY_IN_RESPONSE(self, data, ps):
         # Int16(2) - Number of columns
@@ -2063,7 +2170,7 @@ class Connection():
 
         bffr = bytearray(8192)
         while True:
-            bytes_read = ps.stream.readinto(bffr)
+            bytes_read = await asyncio.to_thread(ps.stream.readinto, bffr)
             if bytes_read == 0:
                 break
             await self._write(COPY_DATA + i_pack(bytes_read + 4))
@@ -2248,37 +2355,16 @@ class Connection():
     async def Prepare(self, cursor, query, vals):
 
         statement, make_args = convert_paramstyle(nzpy_extended.paramstyle, query)
-        args = make_args(vals)
-        placeholderCount = query.count('?')
-        if placeholderCount == 0:
-            return query
+        args = tuple(make_args(vals))
         if len(args) >= 65536:
             self.log.warning("got %d parameters but PostgreSQL only "
                              "supports 65535 parameters", len(args))
-        if len(args) != placeholderCount:
-            self.log.warning("got %d parameters but the statement "
-                             "requires %d", len(args), placeholderCount)
-
-        for arg in args:
-            if isinstance(arg, str) or isinstance(arg, datetime.time) or \
-                    isinstance(arg, datetime.date) or \
-                    isinstance(arg, datetime.datetime) or \
-                    isinstance(arg, dict):
-                escaped = str(arg).replace("'", "''")
-                query = query.replace('?', "'{}'".format(escaped), 1)
-            elif isinstance(arg, bytes):
-                bytfmt = "x'{}'"
-                query = \
-                    query.replace('?',
-                                  bytfmt.
-                                  format(arg.decode(self._client_encoding)),
-                                  1)
-            elif arg is None:
-                query = query.replace('?', 'NULL', 1)
-            else:
-                query = query.replace('?', str(arg), 1)
-
-        return query
+        rendered_query, expected_args = _render_prepared_statement(statement, args)
+        if expected_args == 0:
+            return statement
+        if len(args) != expected_args:
+            self.log.warning("got %d parameters but the statement requires %d", len(args), expected_args)
+        return rendered_query
 
     async def _drain_protocol_generator(self, generator):
         """Consume remaining protocol messages after an error (C# DoNextStep parity)."""
@@ -2485,7 +2571,7 @@ class Connection():
             pass
 
         if self.error is not None:
-            raise ProgrammingError(self.error)
+            raise self.error
 
         if response == "ROW_DESCRIPTION" and len(cursor.ps.get('row_desc', [])) > 0:
             cursor._has_rows = True
@@ -2540,7 +2626,8 @@ class Connection():
                 continue
             if response == ERROR_RESPONSE:
                 length = i_unpack(await self._read(4))[0]
-                self.error = str(await self._read(length), self._client_encoding)
+                data = await self._read(length)
+                await self.handle_ERROR_RESPONSE(data, cursor)
                 self.log.debug("Response received from backend:%s", self.error)
                 yield "ERROR"
                 continue
@@ -2616,11 +2703,12 @@ class Connection():
                 fnameBuf = await self._read(length)
                 fname = str(fnameBuf, self._client_encoding)
                 try:
-                    is_fifo = stat.S_ISFIFO(os.stat(fname).st_mode) if os.path.exists(fname) else False
+                    stat_result = await asyncio.to_thread(os.stat, fname) if os.path.exists(fname) else None
+                    is_fifo = stat.S_ISFIFO(stat_result.st_mode) if stat_result else False
                     if is_fifo:
-                        fh = open(fname, "wb")
+                        fh = await asyncio.to_thread(open, fname, "wb")
                     else:
-                        fh = open(fname, "wb+")
+                        fh = await asyncio.to_thread(open, fname, "wb+")
                     self.log.debug("Successfully opened file: %s", fname)
                     # file open successfully, send status back to datawriter
                     buf = bytearray(i_pack(0))
@@ -2630,7 +2718,8 @@ class Connection():
                     self.log.warning("Error while opening file")
 
             if response == b"U":  # handle unload data
-                await self.receiveAndWriteDatatoExternal(fname, fh)
+                if fh is not None:
+                    await self.receiveAndWriteDatatoExternal(fname, fh)
                 yield "EXTAB_DATA"
 
             if response == b"l":
@@ -2694,6 +2783,11 @@ class Connection():
                 self.log.debug("Response received from backend:%s", notice)
                 cursor._cached_rows.append([])
                 yield "NOTICE"
+
+            if response == b"s":
+                length = i_unpack(await self._read(4))[0]
+                await self._read(length)
+                continue
 
     def Res_get_dbos_column_descriptions(self, data, tupdesc):
 
@@ -2842,7 +2936,7 @@ class Connection():
                     result = timestamp2struct(workspace)
                     if result is not False:
                         timestamp_value = result
-                row.append(datetime(timestamp_value[0], timestamp_value[1], timestamp_value[2], timestamp_value[3], timestamp_value[4], timestamp_value[5], timestamp_value[6]))
+                row.append(Datetime(timestamp_value[0], timestamp_value[1], timestamp_value[2], timestamp_value[3], timestamp_value[4], timestamp_value[5], timestamp_value[6]))
             elif fldtype == NzTypeNumeric:
                 fsize = tupdesc.field_size[cur_field]
                 scale = fsize & 0x00FF
@@ -3009,7 +3103,7 @@ class Connection():
             'display_size': display_size,
             'internal_size': internal_size,
             'numeric_precision': numeric_precision,
-            'numeric_scale': num_scale,
+            'numeric_scale': numeric_scale,
             'data_type': data_type,
             'null_ok': self._column_null_ok(index, tupdesc),
             'is_long': column_size > 8000,
@@ -3077,7 +3171,9 @@ class Connection():
                     numBytes = i_unpack(await self._read(4))[0]
                     try:
                         blockBuffer = await self._read(numBytes)
-                        fh.write(blockBuffer)
+                        if fh is not None:
+                            await asyncio.to_thread(fh.write, blockBuffer)
+                            await asyncio.to_thread(fh.flush)
                         self.log.info("Successfully written %d bytes to file", numBytes)
                     except Exception as e:
                         self.log.error("Error writing data to file '%s': %s", fname, str(e))
@@ -3105,11 +3201,12 @@ class Connection():
                     break
 
         finally:
-            try:
-                fh.close()
-                self.log.debug("Closed export file: %s", fname)
-            except Exception:
-                pass
+            if fh is not None:
+                try:
+                    await asyncio.to_thread(fh.close)
+                    self.log.debug("Closed export file: %s", fname)
+                except Exception:
+                    pass
 
         return
 
@@ -3139,12 +3236,14 @@ class Connection():
                       "Host version=%d ", format,
                       blockSize, hostversion)
 
+        effectiveBlockSize = max(blockSize, 1)
+
         try:
-            filehandle = open(filename, 'rb')
+            filehandle = await asyncio.to_thread(open, filename, 'rb')
             self.log.info("Successfully opened External"
                           " file to read:%s", filename)
             while True:
-                data = filehandle.read(blockSize)
+                data = await asyncio.to_thread(filehandle.read, effectiveBlockSize)
                 if not data:
                     break
                 data_len = len(data)
@@ -3167,7 +3266,7 @@ class Connection():
                     await self._write(val)
                     await self._flush()
                 self.log.debug("No. of bytes sent to BE:%s", data_len)
-            filehandle.close()
+            await asyncio.to_thread(filehandle.close)
             val = bytearray(i_pack(EXTAB_SOCK_DONE))
             await self._write(val)
             await self._flush()
@@ -3209,15 +3308,15 @@ class Connection():
 
         if logType == 1:
             fullpath = fullpath + ".nzlog"
-            fh = open(fullpath, "wb+")
+            fh = await asyncio.to_thread(open, fullpath, "wb+")
         elif logType == 2:
             fullpath = fullpath + ".nzbad"
-            fh = open(fullpath, "wb+")
+            fh = await asyncio.to_thread(open, fullpath, "wb+")
         elif logType == 3:
             fullpath = fullpath + ".nzstats"
-            fh = open(fullpath, "wb+")
+            fh = await asyncio.to_thread(open, fullpath, "wb+")
         else:
-            fh = open(fullpath, "wb+")
+            fh = await asyncio.to_thread(open, fullpath, "wb+")
 
         try:
             while (1):
@@ -3231,7 +3330,7 @@ class Connection():
 
                 if status:
                     try:
-                        fh.write(dataBuffer)
+                        await asyncio.to_thread(fh.write, dataBuffer)
                         self.log.info("Successfully written data "
                                       "into file: %s", fullpath)
                     except Exception as e:
@@ -3240,7 +3339,7 @@ class Connection():
                         status = False
 
         finally:
-            fh.close()
+            await asyncio.to_thread(fh.close)
 
         return status
 
@@ -3310,6 +3409,11 @@ class Connection():
             else:
                 vlen = i_unpack(data, data_idx)[0]
                 data_idx += 4
+                if vlen < 4:
+                    raise InterfaceError(
+                        f"Invalid data row: vlen={vlen} for column {i} "
+                        f"(min 4 expected)"
+                    )
                 val = func(data, data_idx, vlen - 4)
                 data_idx += vlen - 4
                 if row_desc[i]['type_oid'] == 1042:

@@ -91,6 +91,18 @@ async def test_qmark(db_table):
 
 
 @pytest.mark.asyncio
+async def test_qmark_ignores_literals_and_comments(con):
+    orig_paramstyle = nzpy.paramstyle
+    try:
+        nzpy.paramstyle = "qmark"
+        cur = con.cursor()
+        await cur.execute("SELECT '?', ? -- ?\n, '?'", ("value",))
+        assert await cur.fetchone() == ["?", "value", "?"]
+    finally:
+        nzpy.paramstyle = orig_paramstyle
+
+
+@pytest.mark.asyncio
 async def test_arraysize(db_table):
     c1 = db_table.cursor()
     c1.arraysize = 3

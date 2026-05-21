@@ -5,6 +5,8 @@ import threading
 import time
 import pytest
 
+from decimal import Decimal
+
 import nzpy_extended as nzpy
 
 pytestmark = pytest.mark.full
@@ -698,3 +700,216 @@ class TestExternalTableRoundtrip:
         
         assert rows[2][0] == 3
         assert str(rows[2][1]) == '2026-05-21'
+
+
+class TestExternalTableCompressed:
+
+    @pytest.fixture(autouse=True)
+    def setup(self, con, cursor):
+        self.con = con
+        self.cursor = cursor
+        self.working_dir = tempfile.gettempdir()
+        self.test_files = []
+
+        yield
+
+        for filepath in self.test_files:
+            if os.path.exists(filepath):
+                try:
+                    os.remove(filepath)
+                except Exception:
+                    pass
+
+    def _track_file(self, filename):
+        filepath = os.path.join(self.working_dir, filename)
+        self.test_files.append(filepath)
+        return filepath
+
+    @pytest.mark.asyncio
+    async def test_compressed_internal_export_import(self):
+        await self.cursor.execute("DROP TABLE test_comp_src IF EXISTS")
+        await self.cursor.execute("""
+            CREATE TABLE test_comp_src (
+                id INT,
+                name VARCHAR(100),
+                value FLOAT
+            ) DISTRIBUTE ON RANDOM
+        """)
+        await self.cursor.execute("INSERT INTO test_comp_src VALUES (1, 'alpha', 1.5)")
+        await self.cursor.execute("INSERT INTO test_comp_src VALUES (2, 'beta', 2.5)")
+        await self.cursor.execute("INSERT INTO test_comp_src VALUES (3, 'gamma', 3.5)")
+
+        export_file = self._track_file('test_comp_internal.nz')
+
+        await self.cursor.execute(f"""
+            CREATE EXTERNAL TABLE '{export_file}' USING (
+                REMOTESOURCE 'python'
+                FORMAT 'INTERNAL'
+                COMPRESS 'TRUE'
+            ) AS SELECT * FROM test_comp_src
+        """)
+
+        assert os.path.exists(export_file)
+        assert os.path.getsize(export_file) > 0
+
+        await self.cursor.execute("DROP TABLE test_comp_tgt IF EXISTS")
+        await self.cursor.execute("""
+            CREATE TABLE test_comp_tgt (
+                id INT,
+                name VARCHAR(100),
+                value FLOAT
+            ) DISTRIBUTE ON RANDOM
+        """)
+
+        await self.cursor.execute(f"""
+            INSERT INTO test_comp_tgt
+            SELECT * FROM EXTERNAL '{export_file}'
+            USING (
+                REMOTESOURCE 'python'
+                FORMAT 'INTERNAL'
+                COMPRESS 'TRUE'
+            )
+        """)
+
+        await self.cursor.execute("""
+            SELECT COUNT(1) FROM (
+                SELECT * FROM test_comp_tgt
+                MINUS SELECT * FROM test_comp_src
+            ) X
+        """)
+        diff_count = (await self.cursor.fetchone())[0]
+        assert diff_count == 0
+
+    @pytest.mark.asyncio
+    async def test_compressed_internal_mixed_types(self):
+        await self.cursor.execute("DROP TABLE test_comp_types_src IF EXISTS")
+        await self.cursor.execute("""
+            CREATE TABLE test_comp_types_src (
+                id INT,
+                int_val INT,
+                big_val BIGINT,
+                float_val FLOAT,
+                dec_val NUMERIC(10,2),
+                str_val VARCHAR(100),
+                bool_val BOOLEAN,
+                date_val DATE
+            ) DISTRIBUTE ON RANDOM
+        """)
+        await self.cursor.execute(
+            "INSERT INTO test_comp_types_src VALUES "
+            "(1, 100, 999999, 3.14, 123.45, 'hello', TRUE, '2026-01-15')"
+        )
+        await self.cursor.execute(
+            "INSERT INTO test_comp_types_src VALUES "
+            "(2, 200, 888888, 2.71, 67.89, 'world', FALSE, '2026-06-20')"
+        )
+
+        export_file = self._track_file('test_comp_types.nz')
+
+        await self.cursor.execute(f"""
+            CREATE EXTERNAL TABLE '{export_file}' USING (
+                REMOTESOURCE 'python'
+                FORMAT 'INTERNAL'
+                COMPRESS 'TRUE'
+            ) AS SELECT * FROM test_comp_types_src
+        """)
+
+        assert os.path.exists(export_file)
+        assert os.path.getsize(export_file) > 0
+
+        await self.cursor.execute("DROP TABLE test_comp_types_tgt IF EXISTS")
+        await self.cursor.execute("""
+            CREATE TABLE test_comp_types_tgt (
+                id INT,
+                int_val INT,
+                big_val BIGINT,
+                float_val FLOAT,
+                dec_val NUMERIC(10,2),
+                str_val VARCHAR(100),
+                bool_val BOOLEAN,
+                date_val DATE
+            ) DISTRIBUTE ON RANDOM
+        """)
+
+        await self.cursor.execute(f"""
+            INSERT INTO test_comp_types_tgt
+            SELECT * FROM EXTERNAL '{export_file}'
+            USING (
+                REMOTESOURCE 'python'
+                FORMAT 'INTERNAL'
+                COMPRESS 'TRUE'
+            )
+        """)
+
+        await self.cursor.execute("SELECT * FROM test_comp_types_tgt ORDER BY id")
+        rows = await self.cursor.fetchall()
+        assert len(rows) == 2
+        assert rows[0][0] == 1
+        assert rows[0][1] == 100
+        assert rows[0][4] == Decimal('123.45')
+        assert rows[0][5] == 'hello'
+        assert rows[0][6] is True
+        assert str(rows[0][7]) == '2026-01-15'
+
+    @pytest.mark.asyncio
+    async def test_compressed_internal_larger_roundtrip(self):
+        await self.cursor.execute("DROP TABLE test_comp_large_src IF EXISTS")
+        await self.cursor.execute("""
+            CREATE TABLE test_comp_large_src (
+                id INT,
+                text_data VARCHAR(500)
+            ) DISTRIBUTE ON RANDOM
+        """)
+        for i in range(50):
+            await self.cursor.execute(
+                f"INSERT INTO test_comp_large_src VALUES ({i}, "
+                f"'Row number {i} with padding text that is repeatable "
+                f"and should compress well xxxxxxxxxxxxxxxxxxxxxxxxxxxx')"
+            )
+
+        export_file = self._track_file('test_comp_large.nz')
+
+        await self.cursor.execute(f"""
+            CREATE EXTERNAL TABLE '{export_file}' USING (
+                REMOTESOURCE 'python'
+                FORMAT 'INTERNAL'
+                COMPRESS 'TRUE'
+            ) AS SELECT * FROM test_comp_large_src
+        """)
+
+        assert os.path.exists(export_file)
+        export_size = os.path.getsize(export_file)
+        assert export_size > 0
+
+        await self.cursor.execute("DROP TABLE test_comp_large_tgt IF EXISTS")
+        await self.cursor.execute("""
+            CREATE TABLE test_comp_large_tgt (
+                id INT,
+                text_data VARCHAR(500)
+            ) DISTRIBUTE ON RANDOM
+        """)
+
+        await self.cursor.execute(f"""
+            INSERT INTO test_comp_large_tgt
+            SELECT * FROM EXTERNAL '{export_file}'
+            USING (
+                REMOTESOURCE 'python'
+                FORMAT 'INTERNAL'
+                COMPRESS 'TRUE'
+            )
+        """)
+
+        await self.cursor.execute("""
+            SELECT COUNT(1) FROM (
+                SELECT * FROM test_comp_large_tgt
+                MINUS SELECT * FROM test_comp_large_src
+            ) X
+        """)
+        diff_count = (await self.cursor.fetchone())[0]
+        assert diff_count == 0
+
+        await self.cursor.execute(
+            "SELECT COUNT(1) FROM test_comp_large_tgt"
+        )
+        row_count = (await self.cursor.fetchone())[0]
+        assert row_count == 50

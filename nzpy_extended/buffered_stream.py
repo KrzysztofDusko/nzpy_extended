@@ -45,19 +45,23 @@ class NzBufferedStream:
     async def read(self, n: int) -> bytes:
         if n == 0:
             return b""
-            
+
         if n > self.max_size:
+            if n > 100 * 1024 * 1024:
+                raise ValueError(
+                    f"Requested read size {n} exceeds maximum allowed 104857600"
+                )
             result = bytearray(n)
             res_view = memoryview(result)
             bytes_read = 0
-            
+
             avail = self.tail - self.head
             if avail > 0:
                 to_copy = min(n, avail)
                 res_view[:to_copy] = self.view[self.head:self.head + to_copy]
                 self.head += to_copy
                 bytes_read += to_copy
-                
+
             while bytes_read < n:
                 chunk_len = await self.loop.sock_recv_into(self.sock, res_view[bytes_read:])
                 if not chunk_len:

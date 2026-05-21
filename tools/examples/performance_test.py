@@ -9,6 +9,7 @@ if root_dir not in sys.path:
     sys.path.insert(0, root_dir)
 
 import nzpy_extended
+from nzpy_extended import core as nzpy_core
 from nzpy_extended.pool import NzPool
 
 # Try to import official nzpy for comparison
@@ -110,7 +111,24 @@ ALL_TYPES_QUERY = f"""
 QUERIES["all_types"] = ALL_TYPES_QUERY
 
 
-DRIVER_NAMES = ["official_nzpy", "pyodbc", "nzpy_extended"]
+DRIVER_NAMES = [
+    "official_nzpy",
+    "pyodbc",
+    "nzpy_extended_async",
+    "nzpy_extended_sync",
+    "nzpy_extended_async_nocext",
+    "nzpy_extended_sync_nocext",
+]
+
+
+def fmt_num(n):
+    """Format an integer with a space as thousand separator."""
+    return f"{n:,}".replace(",", " ")
+
+
+def fmt_rps(rps):
+    """Format rows/s value with a space as thousand separator."""
+    return f"{rps:_.2f}".replace("_", " ")
 
 
 async def _run_async_query(conn, label, query, results_dict):
@@ -122,7 +140,7 @@ async def _run_async_query(conn, label, query, results_dict):
         elapsed = time.perf_counter() - start
         count = len(rows)
         rps = count / elapsed if elapsed > 0 else 0
-        print(f"fetched {count} rows in {elapsed:.4f}s ({rps:.2f} rows/s)")
+        print(f"fetched {fmt_num(count)} rows in {elapsed:.4f}s ({fmt_rps(rps)} rows/s)")
         results_dict[label] = {
             "query_time": elapsed,
             "rows_per_second": rps,
@@ -139,7 +157,7 @@ def _run_sync_query(conn, label, query, results_dict):
         elapsed = time.perf_counter() - start
         count = len(rows)
         rps = count / elapsed if elapsed > 0 else 0
-        print(f"fetched {count} rows in {elapsed:.4f}s ({rps:.2f} rows/s)")
+        print(f"fetched {fmt_num(count)} rows in {elapsed:.4f}s ({fmt_rps(rps)} rows/s)")
         results_dict[label] = {
             "query_time": elapsed,
             "rows_per_second": rps,
@@ -150,7 +168,7 @@ def _run_sync_query(conn, label, query, results_dict):
 def _print_bar(label, rps, max_rps):
     bar_len = int((rps / max_rps) * 40) if max_rps > 0 else 0
     bar = "#" * bar_len + "-" * (40 - bar_len)
-    print(f"  {label:30s} [{bar}] {rps:>10.2f} rows/s")
+    print(f"  {label:30s} [{bar}] {fmt_rps(rps):>12s} rows/s")
 
 
 async def _run_sync_driver(label, connect_fn, query, results_dict):
@@ -158,9 +176,32 @@ async def _run_sync_driver(label, connect_fn, query, results_dict):
         start_conn = time.perf_counter()
         conn = connect_fn()
         ct = time.perf_counter() - start_conn
-        print(f"  {label}: Connected in {ct:.4f}s")
+        flags = []
+        if not nzpy_core._HAVE_C_EXT:
+            flags.append("C ext disabled")
+        tag = f" ({', '.join(flags)})" if flags else ""
+        print(f"  {label}: Connected in {ct:.4f}s{tag}")
         _run_sync_query(conn, label, query, results_dict)
         conn.close()
+    except Exception as e:
+        print(f"  {label}: ERROR - {e}")
+        results_dict[label] = {"error": str(e)}
+
+
+async def _run_async_driver_extended(label, query, results_dict):
+    try:
+        start_conn = time.perf_counter()
+        conn = await nzpy_extended.connect(
+            user=USER, password=PASSWORD, host=HOST, port=PORT, database=DATABASE
+        )
+        ct = time.perf_counter() - start_conn
+        flags = []
+        if not nzpy_core._HAVE_C_EXT:
+            flags.append("C ext disabled")
+        tag = f" ({', '.join(flags)})" if flags else ""
+        print(f"  {label}: Connected in {ct:.4f}s{tag}")
+        await _run_async_query(conn, label, query, results_dict)
+        await conn.close()
     except Exception as e:
         print(f"  {label}: ERROR - {e}")
         results_dict[label] = {"error": str(e)}
@@ -194,26 +235,48 @@ async def run_single_type(type_name, query):
             results,
         )
 
-    # nzpy_extended (async)
-    try:
-        start_conn = time.perf_counter()
-        conn = await nzpy_extended.connect(
+    # nzpy_extended async (with C extension)
+    await _run_async_driver_extended("nzpy_extended_async", query, results)
+
+    # nzpy_extended sync (with C extension)
+    await _run_sync_driver(
+        "nzpy_extended_sync",
+        lambda: nzpy_extended.sync.connect(
             user=USER, password=PASSWORD, host=HOST, port=PORT, database=DATABASE
+        ),
+        query,
+        results,
+    )
+
+    # nzpy_extended async (pure Python, no C extension)
+    original_cext = nzpy_core._HAVE_C_EXT
+    nzpy_core._HAVE_C_EXT = False
+    try:
+        await _run_async_driver_extended("nzpy_extended_async_nocext", query, results)
+    finally:
+        nzpy_core._HAVE_C_EXT = original_cext
+
+    # nzpy_extended sync (pure Python, no C extension)
+    original_cext = nzpy_core._HAVE_C_EXT
+    nzpy_core._HAVE_C_EXT = False
+    try:
+        await _run_sync_driver(
+            "nzpy_extended_sync_nocext",
+            lambda: nzpy_extended.sync.connect(
+                user=USER, password=PASSWORD, host=HOST, port=PORT, database=DATABASE
+            ),
+            query,
+            results,
         )
-        ct = time.perf_counter() - start_conn
-        print(f"  nzpy_extended: Connected in {ct:.4f}s")
-        await _run_async_query(conn, "nzpy_extended", query, results)
-        await conn.close()
-    except Exception as e:
-        print(f"  nzpy_extended: ERROR - {e}")
-        results["nzpy_extended"] = {"error": str(e)}
+    finally:
+        nzpy_core._HAVE_C_EXT = original_cext
 
     return results
 
 
 async def run_performance_test():
     print(f"--- nzpy_extended performance test (data-type breakdown) ---")
-    print(f"Host: {HOST}:{PORT}, DB: {DATABASE}, Rows: {ROW_LIMIT}")
+    print(f"Host: {HOST}:{PORT}, DB: {DATABASE}, Rows: {fmt_num(ROW_LIMIT)}")
     print(f"Official nzpy: {NZPY_AVAILABLE},  pyodbc: {PYODBC_AVAILABLE}")
     print()
 
@@ -235,14 +298,14 @@ async def run_performance_test():
     for d in DRIVER_NAMES:
         header_row += f"  {d:>16s}"
     print(header_row)
-    print("  " + "-" * (20 + 3 + 16 * 3))
+    print("  " + "-" * (20 + 18 * len(DRIVER_NAMES)))
 
     for type_name in QUERIES:
         row = f"  {type_name:20s}"
         for d in DRIVER_NAMES:
             r = all_results.get(type_name, {}).get(d)
             if r and "error" not in r:
-                row += f"  {r['rows_per_second']:16.2f}"
+                row += f"  {fmt_rps(r['rows_per_second']):>16s}"
             elif r:
                 row += f"  {'ERROR':>16s}"
             else:
@@ -275,8 +338,8 @@ async def run_performance_test():
                 print(
                     f"  {type_name:20s}  {driver_name:20s}  "
                     f"{r['query_time']:.4f}s  |  "
-                    f"{r['rows_per_second']:>10.2f} rows/s  |  "
-                    f"{r['row_count']} rows"
+                    f"{fmt_rps(r['rows_per_second']):>12s} rows/s  |  "
+                    f"{fmt_num(r['row_count'])} rows"
                 )
             else:
                 print(
