@@ -136,17 +136,6 @@ class SyncHandshake:
         self.log.debug("Latest-handshake version (conn-protocol) = %s", version)
 
         while True:
-            if version == CP_VERSION_6:
-                version = CP_VERSION_6
-            if version == CP_VERSION_5:
-                version = CP_VERSION_5
-            if version == CP_VERSION_4:
-                version = CP_VERSION_4
-            if version == CP_VERSION_3:
-                version = CP_VERSION_3
-            if version == CP_VERSION_2:
-                version = CP_VERSION_2
-
             self.log.debug("sending version: %s", version)
             val = bytearray(core.h_pack(HSV2_CLIENT_BEGIN) + core.h_pack(version))
             self._write(core.i_pack(len(val) + 4))
@@ -173,6 +162,9 @@ class SyncHandshake:
                     version = CP_VERSION_4
                 elif version_bytes == b'5':
                     version = CP_VERSION_5
+                else:
+                    self.log.warning("Unsupported handshake version: %s", version_bytes)
+                    return False
             elif beresp == b'E':
                 self.log.warning("Bad attribute value error")
                 return False

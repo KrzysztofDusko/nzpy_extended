@@ -8,7 +8,7 @@ from nzpy_extended.core import (ArrayContentNotHomogenousError,
                        OperationalError, PGEnum, PGJson, PGJsonb,
                        PGText, PGTsvector, PGVarchar, ProgrammingError,
                        Time, TimeFromTicks, Timestamp, TimestampFromTicks,
-                       Warning)
+                       Warning, load_data)
 from nzpy_extended.pool import AsyncNullPool, NullPool, NzPool, SyncPool
 
 from . import sync
@@ -93,7 +93,7 @@ __all__ = [
     "Timestamp", "TimestampFromTicks", "BINARY", "Interval", "PGEnum", "PGJson", "PGJsonb",
     "PGTsvector", "PGText", "PGVarchar",
     "NzPool", "SyncPool", "NullPool", "AsyncNullPool",
-    "sync",
+    "sync", "load_data",
 ]
 
 """Version string for nzpy_extended.

@@ -54,6 +54,39 @@ static void time2struct_c(int64_t time_us, int *hour, int *min, int *sec, int *u
     *hour = (int)(time_us / 60);
 }
 
+/* ====== inline rstrip(\x00) / ljust (avoids PyObject_CallMethod) ====== */
+
+static PyObject* str_rstrip_null(PyObject *s) {
+    Py_ssize_t len = PyUnicode_GetLength(s);
+    if (len == 0) { Py_INCREF(s); return s; }
+    int kind = PyUnicode_KIND(s);
+    void *data = PyUnicode_DATA(s);
+    Py_ssize_t new_len = len;
+    while (new_len > 0 && PyUnicode_READ(kind, data, new_len - 1) == 0)
+        new_len--;
+    if (new_len == len) { Py_INCREF(s); return s; }
+    PyObject *trimmed = PyUnicode_Substring(s, 0, new_len);
+    if (!trimmed) { Py_INCREF(s); return s; }
+    return trimmed;
+}
+
+static PyObject* str_ljust_spaces(PyObject *s, Py_ssize_t width) {
+    Py_ssize_t len = PyUnicode_GetLength(s);
+    if (len >= width) { Py_INCREF(s); return s; }
+    PyObject *result = PyUnicode_New(width, 127);
+    if (!result) { Py_INCREF(s); return s; }
+    int k = PyUnicode_KIND(s);
+    void *src = PyUnicode_DATA(s);
+    int rk = PyUnicode_KIND(result);
+    void *rdst = PyUnicode_DATA(result);
+    Py_ssize_t copy_len = (len < width) ? len : width;
+    for (Py_ssize_t j = 0; j < copy_len; j++)
+        PyUnicode_WRITE(rk, rdst, j, PyUnicode_READ(k, src, j));
+    for (Py_ssize_t j = copy_len; j < width; j++)
+        PyUnicode_WRITE(rk, rdst, j, (Py_UCS4)' ');
+    return result;
+}
+
 /* ====== string decode (avoids memoryview slice) ====== */
 
 static PyObject* c_decode_str(PyObject *self, PyObject *args) {
@@ -273,12 +306,29 @@ static int64_t read_int64_from_words(const char *data, int offset, int count) {
     return (int64_t)uval;
 }
 
-static int64_t power_of_10_int64(int scale) {
-    int64_t result = 1;
-    for (int i = 0; i < scale; i++) {
-        if (result > INT64_MAX / 10) return -1;
-        result *= 10;
+static PyObject* dec_from_pylong_scaled(PyObject *py_long_val, int scale) {
+    if (!DecimalType) {
+        Py_INCREF(py_long_val);
+        return py_long_val;
     }
+    PyObject *dec = PyObject_CallFunctionObjArgs(DecimalType, py_long_val, NULL);
+    if (!dec) return NULL;
+    if (scale == 0) return dec;
+
+    PyObject *ten = PyLong_FromLong(10);
+    PyObject *ten_dec = PyObject_CallFunctionObjArgs(DecimalType, ten, NULL);
+    Py_DECREF(ten);
+    if (!ten_dec) { Py_DECREF(dec); return NULL; }
+
+    PyObject *neg_scale = PyLong_FromLong(-scale);
+    PyObject *scale_pow = PyObject_CallMethod(ten_dec, "__pow__", "(O)", neg_scale);
+    Py_DECREF(ten_dec);
+    Py_DECREF(neg_scale);
+    if (!scale_pow) { Py_DECREF(dec); return NULL; }
+
+    PyObject *result = PyNumber_Multiply(dec, scale_pow);
+    Py_DECREF(dec);
+    Py_DECREF(scale_pow);
     return result;
 }
 
@@ -290,35 +340,11 @@ static PyObject* Decimal_From_String(PyObject *str_val) {
 }
 
 static PyObject* format_native(int64_t val, int scale) {
-    PyObject *str_val;
-    if (scale == 0) {
-        str_val = PyUnicode_FromFormat("%lld", val);
-        return Decimal_From_String(str_val);
-    }
-
-    int negative = (val < 0);
-    uint64_t abs_val;
-    if (val == INT64_MIN)
-        abs_val = (uint64_t)INT64_MAX + 1;
-    else
-        abs_val = negative ? (uint64_t)(-val) : (uint64_t)val;
-
-    int64_t divisor = power_of_10_int64(scale);
-    if (divisor < 0) {
-        str_val = PyUnicode_FromFormat("%lld", val);
-        return Decimal_From_String(str_val);
-    }
-
-    uint64_t integer_part = abs_val / (uint64_t)divisor;
-    uint64_t fractional_part = abs_val % (uint64_t)divisor;
-
-    char frac_buf[40];
-    snprintf(frac_buf, sizeof(frac_buf), "%0*llu", scale, (unsigned long long)fractional_part);
-    if (negative)
-        str_val = PyUnicode_FromFormat("-%llu.%s", (unsigned long long)integer_part, frac_buf);
-    else
-        str_val = PyUnicode_FromFormat("%llu.%s", (unsigned long long)integer_part, frac_buf);
-    return Decimal_From_String(str_val);
+    PyObject *py_val = PyLong_FromLongLong(val);
+    if (!py_val) return NULL;
+    PyObject *result = dec_from_pylong_scaled(py_val, scale);
+    Py_DECREF(py_val);
+    return result;
 }
 
 static PyObject* format_bigint(const char *data, int offset, int scale) {
@@ -345,47 +371,9 @@ static PyObject* format_bigint(const char *data, int offset, int scale) {
         if (!val) return NULL;
     }
 
-    PyObject *str_val;
-    if (scale == 0) {
-        str_val = PyObject_Str(val);
-        Py_DECREF(val);
-        return Decimal_From_String(str_val);
-    }
-
-    int negative = (PyObject_RichCompareBool(val, PyLong_FromLong(0), Py_LT) == 1);
-    PyObject *abs_val;
-    if (negative) { abs_val = PyNumber_Negative(val); }
-    else { abs_val = val; Py_INCREF(abs_val); }
-
-    PyObject *ten = PyLong_FromLong(10);
-    PyObject *scale_obj = PyLong_FromLong(scale);
-    PyObject *divisor = PyNumber_Power(ten, scale_obj, Py_None);
-    Py_DECREF(ten); Py_DECREF(scale_obj);
-
-    PyObject *integer_part = PyNumber_FloorDivide(abs_val, divisor);
-    PyObject *fractional_part = PyNumber_Remainder(abs_val, divisor);
-    PyObject *int_str = PyObject_Str(integer_part);
-    PyObject *frac_str = PyObject_Str(fractional_part);
-
-    int frac_len = (int)PyUnicode_GetLength(frac_str);
-    if (frac_len < scale) {
-        int pad = scale - frac_len;
-        PyObject *zeros = PyUnicode_FromStringAndSize("00000000000000000000000000000000000000000", pad);
-        PyObject *padded = PyNumber_Add(zeros, frac_str);
-        Py_DECREF(frac_str); Py_DECREF(zeros);
-        frac_str = padded;
-    }
-
-    if (negative)
-        str_val = PyUnicode_FromFormat("-%S.%S", int_str, frac_str);
-    else
-        str_val = PyUnicode_FromFormat("%S.%S", int_str, frac_str);
-
-    Py_DECREF(val); Py_DECREF(abs_val); Py_DECREF(divisor);
-    Py_DECREF(integer_part); Py_DECREF(fractional_part);
-    Py_DECREF(int_str); Py_DECREF(frac_str);
-
-    return Decimal_From_String(str_val);
+    PyObject *result = dec_from_pylong_scaled(val, scale);
+    Py_DECREF(val);
+    return result;
 }
 
 static PyObject* c_format_numeric(PyObject *self, PyObject *args) {
@@ -455,7 +443,7 @@ static PyObject* c_process_dbos_row(PyObject *self, PyObject *args) {
 
     if (!PyArg_ParseTuple(args, "y*OOOOOOiiiiss",
         &view,
-        &py_field_type, &py_field_size, &py_field_trueSize,  
+        &py_field_type, &py_field_size, &py_field_trueSize,
         &py_field_offset, &py_field_fixedSize, &py_field_physField,
         &numFields, &nullsAllowed, &fixedFieldsSize, &numVaryingFields,
         &char_enc, &client_enc))
@@ -498,13 +486,38 @@ static PyObject* c_process_dbos_row(PyObject *self, PyObject *args) {
         }
     }
 
+    /* Pre-extract metadata to C arrays — avoids PyList_GetItem+PyLong_AsLong per field */
+    long *c_physField = (long*)PyMem_Malloc(numFields * sizeof(long));
+    long *c_field_type = (long*)PyMem_Malloc(numFields * sizeof(long));
+    long *c_field_size = (long*)PyMem_Malloc(numFields * sizeof(long));
+    long *c_field_trueSize = (long*)PyMem_Malloc(numFields * sizeof(long));
+    long *c_field_offset = (long*)PyMem_Malloc(numFields * sizeof(long));
+    long *c_field_fixedSize = (long*)PyMem_Malloc(numFields * sizeof(long));
+    if (!c_physField || !c_field_type || !c_field_size || !c_field_trueSize || !c_field_offset || !c_field_fixedSize) {
+        PyMem_Free(var_offsets); PyMem_Free(c_physField); PyMem_Free(c_field_type);
+        PyMem_Free(c_field_size); PyMem_Free(c_field_trueSize); PyMem_Free(c_field_offset); PyMem_Free(c_field_fixedSize);
+        PyBuffer_Release(&view);
+        return PyErr_NoMemory();
+    }
+    for (int i = 0; i < numFields; i++) {
+        PyObject *tmp;
+        tmp = PyList_GetItem(py_field_physField, i); c_physField[i] = tmp ? PyLong_AsLong(tmp) : 0;
+        tmp = PyList_GetItem(py_field_type, i);     c_field_type[i] = tmp ? PyLong_AsLong(tmp) : 0;
+        tmp = PyList_GetItem(py_field_size, i);     c_field_size[i] = tmp ? PyLong_AsLong(tmp) : 0;
+        tmp = PyList_GetItem(py_field_trueSize, i); c_field_trueSize[i] = tmp ? PyLong_AsLong(tmp) : 0;
+        tmp = PyList_GetItem(py_field_offset, i);   c_field_offset[i] = tmp ? PyLong_AsLong(tmp) : 0;
+        tmp = PyList_GetItem(py_field_fixedSize, i); c_field_fixedSize[i] = tmp ? PyLong_AsLong(tmp) : 0;
+    }
+
     PyObject *result = PyList_New(numFields);
-    if (!result) { PyMem_Free(var_offsets); PyBuffer_Release(&view); return PyErr_NoMemory(); }
+    if (!result) {
+        PyMem_Free(var_offsets); PyMem_Free(c_physField); PyMem_Free(c_field_type);
+        PyMem_Free(c_field_size); PyMem_Free(c_field_trueSize); PyMem_Free(c_field_offset); PyMem_Free(c_field_fixedSize);
+        PyBuffer_Release(&view); return PyErr_NoMemory();
+    }
 
     for (int i = 0; i < numFields; i++) {
-        PyObject *py_physField = PyList_GetItem(py_field_physField, i);
-        long physField = py_physField ? PyLong_AsLong(py_physField) : 0;
-
+        long physField = c_physField[i];
         int byte_idx = (int)(physField >> 3);
         int bit_idx = (int)(physField & 7);
         int isNull = 0;
@@ -517,17 +530,11 @@ static PyObject* c_process_dbos_row(PyObject *self, PyObject *args) {
             continue;
         }
 
-        PyObject *py_fldtype    = PyList_GetItem(py_field_type, i);
-        PyObject *py_fldsize    = PyList_GetItem(py_field_size, i);
-        PyObject *py_fldtrueSz  = PyList_GetItem(py_field_trueSize, i);
-        PyObject *py_fldoffset  = PyList_GetItem(py_field_offset, i);
-        PyObject *py_fldfixedSz = PyList_GetItem(py_field_fixedSize, i);
-
-        long fldtype    = py_fldtype    ? PyLong_AsLong(py_fldtype) : 0;
-        long fldsize    = py_fldsize    ? PyLong_AsLong(py_fldsize) : 0;
-        long fldtrueSz  = py_fldtrueSz  ? PyLong_AsLong(py_fldtrueSz) : 0;
-        long fldoffset  = py_fldoffset  ? PyLong_AsLong(py_fldoffset) : 0;
-        long fldfixedSz = py_fldfixedSz ? PyLong_AsLong(py_fldfixedSz) : 0;
+        long fldtype    = c_field_type[i];
+        long fldsize    = c_field_size[i];
+        long fldtrueSz  = c_field_trueSize[i];
+        long fldoffset  = c_field_offset[i];
+        long fldfixedSz = c_field_fixedSize[i];
 
         int data_off;
         if (fldfixedSz != 0)
@@ -553,10 +560,13 @@ static PyObject* c_process_dbos_row(PyObject *self, PyObject *args) {
             if (data_off + slen <= (int)data_len && slen > 0) {
                 val = PyUnicode_Decode(data + data_off, slen, char_enc, NULL);
                 if (val) {
-                    PyObject *tmp = PyObject_CallMethod(val, "rstrip", "s", "\x00");
-                    if (tmp) { Py_DECREF(val); val = tmp; }
-                    tmp = PyObject_CallMethod(val, "ljust", "i", slen);
-                    if (tmp) { Py_DECREF(val); val = tmp; }
+                    PyObject *trimmed = str_rstrip_null(val);
+                    Py_DECREF(val);
+                    if (trimmed) {
+                        PyObject *padded = str_ljust_spaces(trimmed, slen);
+                        Py_DECREF(trimmed);
+                        val = padded;
+                    } else { Py_INCREF(Py_None); val = Py_None; }
                 }
             } else { Py_INCREF(Py_None); val = Py_None; }
         }
@@ -567,10 +577,13 @@ static PyObject* c_process_dbos_row(PyObject *self, PyObject *args) {
                 if (str_len > 0 && data_off + total_len <= (int)data_len) {
                     val = PyUnicode_Decode(data + data_off + 2, str_len, client_enc, NULL);
                     if (val && fldtype == NZ_TYPE_NCHAR) {
-                        PyObject *tmp = PyObject_CallMethod(val, "rstrip", "s", "\x00");
-                        if (tmp) { Py_DECREF(val); val = tmp; }
-                        tmp = PyObject_CallMethod(val, "ljust", "i", (int)fldsize);
-                        if (tmp) { Py_DECREF(val); val = tmp; }
+                        PyObject *trimmed = str_rstrip_null(val);
+                        Py_DECREF(val);
+                        if (trimmed) {
+                            PyObject *padded = str_ljust_spaces(trimmed, (int)fldsize);
+                            Py_DECREF(trimmed);
+                            val = padded;
+                        } else { Py_INCREF(Py_None); val = Py_None; }
                     }
                 } else { Py_INCREF(Py_None); val = Py_None; }
             } else { Py_INCREF(Py_None); val = Py_None; }
@@ -621,7 +634,7 @@ static PyObject* c_process_dbos_row(PyObject *self, PyObject *args) {
                 val = PyFloat_FromDouble((double)fval);
             } else { Py_INCREF(Py_None); val = Py_None; }
         }
-else if (fldtype == NZ_TYPE_DATE) {
+        else if (fldtype == NZ_TYPE_DATE) {
                 int64_t workspace;
                 if (fldsize >= 8 && data_off + 8 <= (int)data_len) {
                     workspace = read_i64_le(data + data_off);
@@ -672,7 +685,6 @@ else if (fldtype == NZ_TYPE_DATE) {
                     time2struct_c(time_us, &h, &min, &s, &us);
                     val = PyDateTime_FromDateAndTime(y, m, d, h, min, s, us);
                 } else {
-                /* fallback to Python for smaller sizes */
                 val = call_timestamp2struct(workspace);
             }
         }
@@ -724,7 +736,6 @@ else if (fldtype == NZ_TYPE_DATE) {
             val = call_timetz_out(timetz_time, timetz_zone);
         }
         else {
-            /* Unknown type -> None */
             Py_INCREF(Py_None);
             val = Py_None;
         }
@@ -739,6 +750,8 @@ else if (fldtype == NZ_TYPE_DATE) {
     }
 
     PyMem_Free(var_offsets);
+    PyMem_Free(c_physField); PyMem_Free(c_field_type);
+    PyMem_Free(c_field_size); PyMem_Free(c_field_trueSize); PyMem_Free(c_field_offset); PyMem_Free(c_field_fixedSize);
     return result;
 }
 
@@ -806,8 +819,36 @@ static PyObject* c_process_dbos_batch(PyObject *self, PyObject *args) {
         return NULL;
     }
 
+    /* Pre-extract metadata to C arrays once — avoids PyList_GetItem+PyLong_AsLong per field per row */
+    long *c_physField = (long*)PyMem_Malloc(numFields * sizeof(long));
+    long *c_field_type = (long*)PyMem_Malloc(numFields * sizeof(long));
+    long *c_field_size = (long*)PyMem_Malloc(numFields * sizeof(long));
+    long *c_field_trueSize = (long*)PyMem_Malloc(numFields * sizeof(long));
+    long *c_field_offset = (long*)PyMem_Malloc(numFields * sizeof(long));
+    long *c_field_fixedSize = (long*)PyMem_Malloc(numFields * sizeof(long));
+    if (!c_physField || !c_field_type || !c_field_size || !c_field_trueSize || !c_field_offset || !c_field_fixedSize) {
+        PyMem_Free(c_physField); PyMem_Free(c_field_type); PyMem_Free(c_field_size);
+        PyMem_Free(c_field_trueSize); PyMem_Free(c_field_offset); PyMem_Free(c_field_fixedSize);
+        PyBuffer_Release(&view);
+        return PyErr_NoMemory();
+    }
+    for (int i = 0; i < numFields; i++) {
+        PyObject *tmp;
+        tmp = PyList_GetItem(py_field_physField, i); c_physField[i] = tmp ? PyLong_AsLong(tmp) : 0;
+        tmp = PyList_GetItem(py_field_type, i);     c_field_type[i] = tmp ? PyLong_AsLong(tmp) : 0;
+        tmp = PyList_GetItem(py_field_size, i);     c_field_size[i] = tmp ? PyLong_AsLong(tmp) : 0;
+        tmp = PyList_GetItem(py_field_trueSize, i); c_field_trueSize[i] = tmp ? PyLong_AsLong(tmp) : 0;
+        tmp = PyList_GetItem(py_field_offset, i);   c_field_offset[i] = tmp ? PyLong_AsLong(tmp) : 0;
+        tmp = PyList_GetItem(py_field_fixedSize, i); c_field_fixedSize[i] = tmp ? PyLong_AsLong(tmp) : 0;
+    }
+
+    int bitmaplen = numFields / 8;
+    if (numFields % 8) bitmaplen++;
+
     PyObject *rows_list = PyList_New(0);
     if (!rows_list) {
+        PyMem_Free(c_physField); PyMem_Free(c_field_type); PyMem_Free(c_field_size);
+        PyMem_Free(c_field_trueSize); PyMem_Free(c_field_offset); PyMem_Free(c_field_fixedSize);
         PyBuffer_Release(&view);
         return NULL;
     }
@@ -819,32 +860,19 @@ static PyObject* c_process_dbos_batch(PyObject *self, PyObject *args) {
             break;
         }
 
-        // The python code did:
-        // header = read(5)  -> 'Y' + 4 bytes
-        // inner_header = read(8) -> 4 bytes + 4 bytes (tup_len)
-        // So tup_len is at bytes_consumed + 5 + 4 = bytes_consumed + 9
-        // Wait, Python code: i_unpack(inner_header, 4) -> struct.unpack_from('!i', inner_header, 4)
-        // Which is big-endian 32-bit int at offset 4 of inner_header.
-        // inner_header starts at offset 5 from 'Y'.
-        // So tup_len is at bytes_consumed + 5 + 4 = bytes_consumed + 9.
-        
-        uint32_t tup_len_be = read_u32_le(full_data + bytes_consumed + 9); // Wait! read_u32_le is little-endian!
-        // We need big-endian read for tup_len.
         const uint8_t *p = (const uint8_t*)(full_data + bytes_consumed + 9);
         uint32_t tup_len = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
-        
+
         if (bytes_consumed + 13 + tup_len > full_data_len) {
-            // Not enough data for the full tuple
             break;
         }
 
-        // Now process this single tuple exactly like c_process_dbos_row
         const char *data = full_data + bytes_consumed + 13;
         Py_ssize_t data_len = tup_len;
 
-        int bitmaplen = numFields / 8;
-        if (numFields % 8) bitmaplen++;
         if (bitmaplen > data_len) {
+            PyMem_Free(c_physField); PyMem_Free(c_field_type); PyMem_Free(c_field_size);
+            PyMem_Free(c_field_trueSize); PyMem_Free(c_field_offset); PyMem_Free(c_field_fixedSize);
             PyBuffer_Release(&view);
             Py_DECREF(rows_list);
             PyErr_SetString(PyExc_ValueError, "data too short for bitmap");
@@ -855,6 +883,8 @@ static PyObject* c_process_dbos_batch(PyObject *self, PyObject *args) {
         if (numVaryingFields > 0) {
             var_offsets = (int*)PyMem_Malloc(numVaryingFields * sizeof(int));
             if (!var_offsets) {
+                PyMem_Free(c_physField); PyMem_Free(c_field_type); PyMem_Free(c_field_size);
+                PyMem_Free(c_field_trueSize); PyMem_Free(c_field_offset); PyMem_Free(c_field_fixedSize);
                 PyBuffer_Release(&view);
                 Py_DECREF(rows_list);
                 return PyErr_NoMemory();
@@ -871,17 +901,17 @@ static PyObject* c_process_dbos_batch(PyObject *self, PyObject *args) {
         }
 
         PyObject *result = PyList_New(numFields);
-        if (!result) { 
-            if (var_offsets) PyMem_Free(var_offsets); 
-            PyBuffer_Release(&view); 
+        if (!result) {
+            PyMem_Free(var_offsets);
+            PyMem_Free(c_physField); PyMem_Free(c_field_type); PyMem_Free(c_field_size);
+            PyMem_Free(c_field_trueSize); PyMem_Free(c_field_offset); PyMem_Free(c_field_fixedSize);
+            PyBuffer_Release(&view);
             Py_DECREF(rows_list);
-            return PyErr_NoMemory(); 
+            return PyErr_NoMemory();
         }
 
         for (int i = 0; i < numFields; i++) {
-            PyObject *py_physField = PyList_GetItem(py_field_physField, i);
-            long physField = py_physField ? PyLong_AsLong(py_physField) : 0;
-
+            long physField = c_physField[i];
             int byte_idx = (int)(physField >> 3);
             int bit_idx = (int)(physField & 7);
             int isNull = 0;
@@ -894,17 +924,11 @@ static PyObject* c_process_dbos_batch(PyObject *self, PyObject *args) {
                 continue;
             }
 
-            PyObject *py_fldtype    = PyList_GetItem(py_field_type, i);
-            PyObject *py_fldsize    = PyList_GetItem(py_field_size, i);
-            PyObject *py_fldtrueSz  = PyList_GetItem(py_field_trueSize, i);
-            PyObject *py_fldoffset  = PyList_GetItem(py_field_offset, i);
-            PyObject *py_fldfixedSz = PyList_GetItem(py_field_fixedSize, i);
-
-            long fldtype    = py_fldtype    ? PyLong_AsLong(py_fldtype) : 0;
-            long fldsize    = py_fldsize    ? PyLong_AsLong(py_fldsize) : 0;
-            long fldtrueSz  = py_fldtrueSz  ? PyLong_AsLong(py_fldtrueSz) : 0;
-            long fldoffset  = py_fldoffset  ? PyLong_AsLong(py_fldoffset) : 0;
-            long fldfixedSz = py_fldfixedSz ? PyLong_AsLong(py_fldfixedSz) : 0;
+            long fldtype    = c_field_type[i];
+            long fldsize    = c_field_size[i];
+            long fldtrueSz  = c_field_trueSize[i];
+            long fldoffset  = c_field_offset[i];
+            long fldfixedSz = c_field_fixedSize[i];
 
             int data_off;
             if (fldfixedSz != 0)
@@ -930,10 +954,13 @@ static PyObject* c_process_dbos_batch(PyObject *self, PyObject *args) {
                 if (data_off + slen <= (int)data_len && slen > 0) {
                     val = PyUnicode_Decode(data + data_off, slen, char_enc, NULL);
                     if (val) {
-                        PyObject *tmp = PyObject_CallMethod(val, "rstrip", "s", "\x00");
-                        if (tmp) { Py_DECREF(val); val = tmp; }
-                        tmp = PyObject_CallMethod(val, "ljust", "i", slen);
-                        if (tmp) { Py_DECREF(val); val = tmp; }
+                        PyObject *trimmed = str_rstrip_null(val);
+                        Py_DECREF(val);
+                        if (trimmed) {
+                            PyObject *padded = str_ljust_spaces(trimmed, slen);
+                            Py_DECREF(trimmed);
+                            val = padded;
+                        } else { Py_INCREF(Py_None); val = Py_None; }
                     }
                 } else { Py_INCREF(Py_None); val = Py_None; }
             }
@@ -944,10 +971,13 @@ static PyObject* c_process_dbos_batch(PyObject *self, PyObject *args) {
                     if (str_len > 0 && data_off + total_len <= (int)data_len) {
                         val = PyUnicode_Decode(data + data_off + 2, str_len, client_enc, NULL);
                         if (val && fldtype == NZ_TYPE_NCHAR) {
-                            PyObject *tmp = PyObject_CallMethod(val, "rstrip", "s", "\x00");
-                            if (tmp) { Py_DECREF(val); val = tmp; }
-                            tmp = PyObject_CallMethod(val, "ljust", "i", (int)fldsize);
-                            if (tmp) { Py_DECREF(val); val = tmp; }
+                            PyObject *trimmed = str_rstrip_null(val);
+                            Py_DECREF(val);
+                            if (trimmed) {
+                                PyObject *padded = str_ljust_spaces(trimmed, (int)fldsize);
+                                Py_DECREF(trimmed);
+                                val = padded;
+                            } else { Py_INCREF(Py_None); val = Py_None; }
                         }
                     } else { Py_INCREF(Py_None); val = Py_None; }
                 } else { Py_INCREF(Py_None); val = Py_None; }
@@ -1004,7 +1034,7 @@ static PyObject* c_process_dbos_batch(PyObject *self, PyObject *args) {
                     workspace = read_i64_le(data + data_off);
                 } else if (data_off + (int)fldsize <= (int)data_len) {
                     workspace = read_i64_le(data + data_off);
-                    int64_t mask = (1LL << (fldsize * 8)) - 1;
+                    int64_t mask = (1LL << ((int)fldsize * 8)) - 1;
                     if (workspace & (1LL << ((int)fldsize * 8 - 1)))
                         workspace |= ~mask;
                     else
@@ -1120,6 +1150,8 @@ static PyObject* c_process_dbos_batch(PyObject *self, PyObject *args) {
         bytes_consumed += 13 + tup_len;
     }
 
+    PyMem_Free(c_physField); PyMem_Free(c_field_type); PyMem_Free(c_field_size);
+    PyMem_Free(c_field_trueSize); PyMem_Free(c_field_offset); PyMem_Free(c_field_fixedSize);
     PyBuffer_Release(&view);
     return Py_BuildValue("On", rows_list, bytes_consumed);
 }
