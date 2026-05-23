@@ -30,5 +30,12 @@ jobs:
       - name: Build sdist and wheel
         run: python -m build
 
+      - name: Repair Linux wheel (manylinux tag)
+        if: runner.os == 'Linux'
+        run: |
+          pip install auditwheel
+          auditwheel repair dist/*.whl --plat manylinux_2_17_x86_64 -w dist/
+          rm -f dist/*-linux_x86_64.whl
+
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
