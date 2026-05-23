@@ -73,5 +73,9 @@ jobs:
         with:
           pattern: wheels-*
           merge-multiple: true
+          path: dist/
+
+      - name: List distributions
+        run: ls -la dist/
 
       - uses: pypa/gh-action-pypi-publish@release/v1
