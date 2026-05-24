@@ -1,53 +1,61 @@
+from __future__ import annotations
 import asyncio
 from collections import deque
+from typing import TYPE_CHECKING, Any
 from warnings import warn
 
 from .exceptions import (ConnectionClosedError, InterfaceError,
                          OperationalError, ProgrammingError)
 
+if TYPE_CHECKING:
+    from .core import Connection
 
-class Cursor():
+
+class Cursor:
     __module__ = 'nzpy_extended.core'
 
-    def __init__(self, connection):
-        self._c = connection
+    def __init__(self, connection: Connection) -> None:
+        self._c: Connection | None = connection
         self.arraysize = 1
-        self.ps = None
+        self.ps: dict[str, Any] | None = None
         self._row_count = -1
-        self._cached_rows = deque()
-        self.notices = deque()
-        self._generator = None
+        self._cached_rows: deque[Any] = deque()
+        self.notices: deque[Any] = deque()
+        self._generator: Any = None
         self._has_rows = False
+        self.stream: Any = None
+        self._timeout: float | None = None
+        self._exec_gen: int | None = None
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> Cursor:
         return self
 
-    async def __aexit__(self, exc_type, exc_value, traceback):
+    async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> None:
         await self.close()
 
     @property
-    def connection(self):
+    def connection(self) -> Connection | None:
         warn("DB-API extension cursor.connection used", stacklevel=3)
         return self._c
 
     @property
-    def rowcount(self):
+    def rowcount(self) -> int:
         return self._row_count
 
     description = property(lambda self: self._getDescription())
 
     @property
-    def has_rows(self):
+    def has_rows(self) -> bool:
         return self._has_rows
 
-    def _getDescription(self):
+    def _getDescription(self) -> tuple[Any, ...] | None:
         if self.ps is None:
             return None
         row_desc = self.ps['row_desc']
         if len(row_desc) == 0:
             return None
         tupdesc = self.ps.get('tupdesc')
-        columns = []
+        columns: list[tuple[Any, ...]] = []
         for i, col in enumerate(row_desc):
             meta = self._c._resolve_column_metadata(col, i, tupdesc) if self._c else None
             if meta is None:
@@ -65,14 +73,14 @@ class Cursor():
                 ))
         return tuple(columns)
 
-    def get_schema_table(self):
+    def get_schema_table(self) -> list[dict[str, Any]]:
         if self.ps is None:
             return []
         row_desc = self.ps['row_desc']
         if len(row_desc) == 0:
             return []
         tupdesc = self.ps.get('tupdesc')
-        rows = []
+        rows: list[dict[str, Any]] = []
         for i, col in enumerate(row_desc):
             meta = self._c._resolve_column_metadata(col, i, tupdesc) if self._c else None
             if meta is None:
@@ -92,7 +100,7 @@ class Cursor():
             })
         return rows
 
-    def get_column_metadata(self, index):
+    def get_column_metadata(self, index: int) -> dict[str, Any] | None:
         if self.ps is None or index < 0 or index >= len(self.ps['row_desc']):
             raise ProgrammingError(f"Column ordinal {index} is out of range")
         col = self.ps['row_desc'][index]
@@ -101,7 +109,7 @@ class Cursor():
             raise ProgrammingError("Cursor closed")
         return self._c._resolve_column_metadata(col, index, tupdesc)
 
-    async def execute(self, operation, args=None, stream=None, timeout=None):
+    async def execute(self, operation: str, args: Any | None = None, stream: Any = None, timeout: float | None = None) -> Cursor:
         try:
             self.stream = stream
             self._timeout = timeout
@@ -133,9 +141,9 @@ class Cursor():
                 raise e
         return self
 
-    async def executemany(self, operation, param_sets):
+    async def executemany(self, operation: str, param_sets: list[Any]) -> Cursor:
         await self.clear()
-        rowcounts = []
+        rowcounts: list[int] = []
         for parameters in param_sets:
             await self.execute(operation, parameters)
             rowcounts.append(self._row_count)
@@ -143,7 +151,7 @@ class Cursor():
         self._row_count = -1 if -1 in rowcounts else sum(rowcounts)
         return self
 
-    async def fetchone(self):
+    async def fetchone(self) -> Any:
         try:
             return await self.__anext__()
         except StopAsyncIteration:
@@ -153,19 +161,19 @@ class Cursor():
         except AttributeError:
             raise ProgrammingError("attempting to use unexecuted cursor")
 
-    async def fetchmany(self, num=None):
+    async def fetchmany(self, num: int | None = None) -> list[Any]:
         try:
-            rows = []
+            rows: list[Any] = []
             for _ in range(self.arraysize if num is None else num):
                 try:
                     rows.append(await self.__anext__())
                 except StopAsyncIteration:
                     break
-            return tuple(rows)
+            return rows
         except TypeError:
             raise ProgrammingError("attempting to use unexecuted cursor")
 
-    async def fetchall(self):
+    async def fetchall(self) -> list[Any]:
         try:
             generator = getattr(self, '_generator', None)
             if generator is None:
@@ -189,10 +197,10 @@ class Cursor():
                         (self.ps is not None and len(self.ps.get('row_desc', [])) > 0)
                     )
                     self._generator = generator
-                    return rows
+                    return [list(r) for r in rows]
                 elif state == "READY_FOR_QUERY":
                     self._generator = None
-                    return rows
+                    return [list(r) for r in rows]
                 elif state == "ERROR":
                     err = self._c.error if self._c is not None else None
                     if self._c is not None:
@@ -200,13 +208,17 @@ class Cursor():
                     self._generator = None
                     if err is not None:
                         raise ProgrammingError(err)
-                    return rows
+                    return [list(r) for r in rows]
             self._generator = None
-            return rows
+            return [list(r) for r in rows]
         except TypeError:
             raise ProgrammingError("attempting to use unexecuted cursor")
 
-    async def close(self):
+    async def cancel(self, exec_gen: int | None = None) -> None:
+        if self._c is not None:
+            await self._c.cancel(exec_gen)
+
+    async def close(self) -> None:
         generator = getattr(self, '_generator', None)
         if generator is not None:
             if self._c is not None:
@@ -214,27 +226,27 @@ class Cursor():
             self._generator = None
         self._c = None
 
-    def __aiter__(self):
+    def __aiter__(self) -> Cursor:
         return self
 
-    def setinputsizes(self, sizes):
+    def setinputsizes(self, sizes: Any) -> None:
         pass
 
-    def setoutputsize(self, size, column=None):
+    def setoutputsize(self, size: Any, column: Any = None) -> None:
         pass
 
-    async def __anext__(self):
-        if getattr(self, '_timeout', None) is not None and self._timeout > 0:
+    async def __anext__(self) -> Any:
+        if getattr(self, '_timeout', None) is not None and self._timeout and self._timeout > 0:
             try:
-                return await asyncio.wait_for(self._anext_internal(), timeout=self._timeout)
+                return list(await asyncio.wait_for(self._anext_internal(), timeout=self._timeout))
             except asyncio.TimeoutError:
                 if self._c is not None:
                     await self._c.cancel(exec_gen=getattr(self, '_exec_gen', None))
                 raise OperationalError("Command fetch timeout")
         else:
-            return await self._anext_internal()
+            return list(await self._anext_internal())
 
-    async def _anext_internal(self):
+    async def _anext_internal(self) -> Any:
         try:
             return self._cached_rows.popleft()
         except IndexError:
@@ -273,13 +285,13 @@ class Cursor():
             else:
                 raise StopAsyncIteration()
 
-    async def clear(self):
+    async def clear(self) -> None:
         generator = getattr(self, '_generator', None)
         if generator is not None:
             if self._c is not None:
                 await self._c._drain_protocol_generator(generator)
             else:
-                async for state in generator:
+                async for _ in generator:
                     pass
             self._generator = None
 
@@ -288,7 +300,7 @@ class Cursor():
         self._has_rows = False
         self._cached_rows.clear()
 
-    async def nextset(self):
+    async def nextset(self) -> bool | None:
         self._cached_rows.clear()
 
         generator = getattr(self, '_generator', None)
@@ -324,3 +336,6 @@ class Cursor():
             if state in ("DATA_ROW", "DATA_BATCH"):
                 self._has_rows = len(self._cached_rows) > 0
                 return True
+
+
+__all__ = ["Cursor"]

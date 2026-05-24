@@ -1,3 +1,10 @@
+from __future__ import annotations
+
+from collections.abc import Callable, Coroutine
+from typing import Any
+
+from ._constants import DEFAULT_BUFFER_SIZE
+
 from nzpy_extended.core import (ArrayContentNotHomogenousError,
                        ArrayContentNotSupportedError,
                        ArrayDimensionsNotConsistentError, BINARY,
@@ -16,30 +23,46 @@ from . import sync
 try:
     from . import fastapi as fastapi
 except ImportError:
-    fastapi = None  # fastapi package not installed — optional integration
+    import typing
+    fastapi: typing.Any = None  # type: ignore[no-redef]
 
 from ._version import get_versions
 
-__version__ = get_versions()['version']
+__version__: str = get_versions()['version']  # type: ignore[no-untyped-call]
 del get_versions
 
-__author__ = "Mathieu Fenniak"
 
-async def connect(user, host='localhost', unix_sock=None, port=5480, database=None,
-            password=None, ssl=None, securityLevel=0, timeout=None,
-            application_name=None, max_prepared_statements=1000,
-            datestyle='ISO', logLevel=0, tcp_keepalive=True,
-            char_varchar_encoding='latin', logOptions=LogOptions.Inherit,
-            pgOptions=None, on_connect=None, ssl_verify=True,
-            connect_timeout=None):
-
+async def connect(
+    user: str,
+    host: str = 'localhost',
+    unix_sock: str | None = None,
+    port: int = 5480,
+    database: str | None = None,
+    password: str | None = None,
+    ssl: Any = None,
+    securityLevel: int = 0,
+    timeout: float | None = None,
+    application_name: str | None = None,
+    max_prepared_statements: int = 1000,
+    datestyle: str = 'ISO',
+    logLevel: int = 0,
+    tcp_keepalive: bool = True,
+    char_varchar_encoding: str = 'latin',
+    logOptions: LogOptions = LogOptions.Inherit,
+    pgOptions: str | None = None,
+    on_connect: Callable[[Connection], Any] | None = None,
+    ssl_verify: bool = True,
+    connect_timeout: float | None = None,
+    buffer_size: int = DEFAULT_BUFFER_SIZE,
+) -> Connection:
     conn = Connection()
     await conn._connect(user, host, unix_sock, port, database, password, ssl,
                       securityLevel, timeout, application_name,
                       max_prepared_statements, datestyle, logLevel,
                       tcp_keepalive, char_varchar_encoding,
                       logOptions, pgOptions, ssl_verify=ssl_verify,
-                      connect_timeout=connect_timeout)
+                      connect_timeout=connect_timeout,
+                      buffer_size=buffer_size)
     if on_connect is not None:
         result = on_connect(conn)
         if hasattr(result, '__await__'):
@@ -47,42 +70,21 @@ async def connect(user, host='localhost', unix_sock=None, port=5480, database=No
     return conn
 
 
-apilevel = "2.0"
-"""The DBAPI level supported, currently "2.0".
-This property is part of the `DBAPI 2.0 specification
-<http://www.python.org/dev/peps/pep-0249/>`_.
-"""
+apilevel: str = "2.0"
 
-threadsafety = 1
-"""Integer constant stating the level of thread safety the DBAPI interface
-supports. This DBAPI module supports sharing of the module only. Connections
-and cursors my not be shared between threads. This gives nzpy_extended a threadsafety
-value of 1.
-This property is part of the `DBAPI 2.0 specification
-<http://www.python.org/dev/peps/pep-0249/>`_.
-"""
+threadsafety: int = 1
 
-paramstyle = 'qmark'
+paramstyle: str = 'qmark'
 
-max_prepared_statements = 1000
+max_prepared_statements: int = 1000
 
-# I have no idea what this would be used for by a client app.  Should it be
-# TEXT, VARCHAR, CHAR?  It will only compare against row_description's
-# type_code if it is this one type.  It is the varchar type oid for now, this
-# appears to match expectations in the DB API 2.0 compliance test suite.
+STRING: int = 1043
 
-STRING = 1043
-"""String type oid."""
+NUMBER: int = 1700
 
+DATETIME: int = 1114
 
-NUMBER = 1700
-"""Numeric type oid"""
-
-DATETIME = 1114
-"""Timestamp type oid"""
-
-ROWID = 26
-"""ROWID type oid"""
+ROWID: int = 26
 
 __all__ = [
     "Warning", "DataError", "DatabaseError", "connect", "InterfaceError",
@@ -94,8 +96,5 @@ __all__ = [
     "PGTsvector", "PGText", "PGVarchar",
     "NzPool", "SyncPool", "NullPool", "AsyncNullPool",
     "sync", "load_data",
+    "DEFAULT_BUFFER_SIZE",
 ]
-
-"""Version string for nzpy_extended.
-    .. versionadded:: 1.9.11
-"""

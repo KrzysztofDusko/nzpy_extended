@@ -1,82 +1,81 @@
-"""
-Synchronous API for nzpy_extended — thin wrapper over async core.
+from __future__ import annotations
 
-Usage:
-    import nzpy_extended.sync as nzpy
-
-    conn = nzpy.connect(
-        user="admin", password="secret",
-        host="netezza-host", database="mydb",
-    )
-    with conn.cursor() as cur:
-        cur.execute("SELECT * FROM mytable WHERE id = ?", (42,))
-        for row in cur:
-            print(row)
-"""
+import socket
+from typing import Any, Callable, Final, Literal, TYPE_CHECKING
 
 from ._runner import _runner
 from .core import Connection
+if TYPE_CHECKING:
+    from collections.abc import Coroutine
 
 
 class SyncCursor:
-    """Synchronous cursor — wrapper over async Cursor."""
+    def __init__(self, async_cursor: Any) -> None:
+        self._c: Any = async_cursor
 
-    def __init__(self, async_cursor):
-        self._c = async_cursor
-
-    def execute(self, sql, args=None):
+    def execute(self, sql: str, args: Any | None = None) -> None:
         _runner.run(self._c.execute(sql, args))
 
-    def executemany(self, sql, seq_of_args):
+    def executemany(self, sql: str, seq_of_args: list[Any]) -> None:
         _runner.run(self._c.executemany(sql, seq_of_args))
 
-    def fetchone(self):
+    def fetchone(self) -> Any:
         return _runner.run(self._c.fetchone())
 
-    def fetchmany(self, num=None):
+    def fetchmany(self, num: int | None = None) -> list[Any]:
         if num is None:
             num = self.arraysize
-        return _runner.run(self._c.fetchmany(num))
+        return _runner.run(self._c.fetchmany(num))  # type: ignore[no-any-return]
 
-    def fetchall(self):
-        return _runner.run(self._c.fetchall())
+    def fetchall(self) -> list[Any]:
+        return _runner.run(self._c.fetchall())  # type: ignore[no-any-return]
 
-    def nextset(self):
+    def nextset(self) -> Any:
         return _runner.run(self._c.nextset())
 
     @property
-    def rowcount(self):
-        return self._c.rowcount
+    def rowcount(self) -> int:
+        return self._c.rowcount  # type: ignore[no-any-return]
 
     @property
-    def description(self):
+    def description(self) -> Any:
         return self._c.description
 
     @property
-    def statusmessage(self):
+    def statusmessage(self) -> Any:
         return getattr(self._c, 'statusmessage', None)
 
     @property
-    def arraysize(self):
-        return self._c.arraysize
+    def arraysize(self) -> int:
+        return self._c.arraysize  # type: ignore[no-any-return]
 
     @arraysize.setter
-    def arraysize(self, value):
+    def arraysize(self, value: int) -> None:
         self._c.arraysize = value
 
-    def close(self):
-        _runner.run(self._c.close())
+    def cancel(self, exec_gen: Any = None) -> None:
+        _runner.run(self._c.cancel(exec_gen))
 
-    def __enter__(self):
+    def interrupt(self) -> None:
+        self.cancel()
+
+    def close(self) -> None:
+        try:
+            if self._c is not None:
+                _runner.run(self._c.close())
+        finally:
+            self._c = None
+
+    def __enter__(self) -> SyncCursor:
         return self
 
-    def __exit__(self, *args):
+    def __exit__(self, *args: Any) -> None:
         try:
             self.close()
         except Exception:
             pass
 
-    def __iter__(self):
+    def __iter__(self) -> Any:
         while True:
             rows = self.fetchmany()
             if not rows:
@@ -84,42 +83,100 @@ class SyncCursor:
             for row in rows:
                 yield row
 
-    def setinputsizes(self, *args):
-        self._c.setinputsizes(*args)
+    def __repr__(self) -> str:
+        return f"<{type(self).__name__} at 0x{id(self):x}>"
 
-    def setoutputsize(self, *args):
-        self._c.setoutputsize(*args)
-
-
-class SyncConnection:
-    """Synchronous connection — wrapper over async Connection."""
-
-    def __init__(self, async_conn):
-        self._conn = async_conn
-
-    def cursor(self):
-        return SyncCursor(self._conn.cursor())
-
-    def commit(self):
-        _runner.run(self._conn.commit())
-
-    def rollback(self):
-        _runner.run(self._conn.rollback())
-
-    def close(self):
-        _runner.run(self._conn.close())
-
-    def __del__(self):
+    def __del__(self) -> None:
         try:
-            if self._conn is not None:
-                _runner.run(self._conn.close())
+            self._c = None
         except Exception:
             pass
 
-    def __enter__(self):
+    def setinputsizes(self, *args: Any) -> None:
+        self._c.setinputsizes(*args)
+
+    def setoutputsize(self, *args: Any) -> None:
+        self._c.setoutputsize(*args)
+
+
+class _TransactionContext:
+    def __init__(self, conn: SyncConnection) -> None:
+        self._conn = conn
+
+    def __enter__(self) -> SyncConnection:
+        return self._conn
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> Literal[False]:
+        if self._conn._conn is None:
+            return False
+        if exc_type:
+            try:
+                self._conn.rollback()
+            except Exception:
+                pass
+        else:
+            try:
+                self._conn.commit()
+            except Exception:
+                pass
+        return False
+
+
+class SyncConnection:
+    def __init__(self, async_conn: Connection) -> None:
+        self._conn: Connection | None = async_conn
+
+    def cursor(self) -> SyncCursor:
+        if self._conn is None:
+            raise RuntimeError("Connection is closed")
+        return SyncCursor(self._conn.cursor())
+
+    def commit(self) -> None:
+        if self._conn is not None:
+            _runner.run(self._conn.commit())
+
+    def rollback(self) -> None:
+        if self._conn is not None:
+            _runner.run(self._conn.rollback())
+
+    def cancel(self, exec_gen: Any = None) -> None:
+        if self._conn is not None:
+            _runner.run(self._conn.cancel(exec_gen))
+
+    def transaction(self) -> _TransactionContext:
+        return _TransactionContext(self)
+
+    def close(self) -> None:
+        try:
+            if self._conn is not None:
+                _runner.run(self._conn.close())
+        finally:
+            self._conn = None
+
+    def __repr__(self) -> str:
+        status = "closed" if self._conn is None else "open"
+        return f"<{type(self).__name__}({status}) at 0x{id(self):x}>"
+
+    def __del__(self) -> None:
+        try:
+            if self._conn is not None:
+                usock = getattr(self._conn, '_usock', None)
+                if usock is not None:
+                    try:
+                        usock.shutdown(socket.SHUT_RDWR)
+                    except Exception:
+                        pass
+                    try:
+                        usock.close()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    def __enter__(self) -> SyncConnection:
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> Literal[False]:
         if exc_type:
             try:
                 self.rollback()
@@ -138,26 +195,26 @@ class SyncConnection:
 
 
 async def _async_connect(
-    user,
-    host,
-    unix_sock,
-    port,
-    database,
-    password,
-    ssl,
-    securityLevel,
-    timeout,
-    application_name,
-    max_prepared_statements,
-    datestyle,
-    logLevel,
-    tcp_keepalive,
-    char_varchar_encoding,
-    on_connect,
-    ssl_verify=True,
-    connect_timeout=None,
-    **kwargs,
-):
+    user: str | bytes,
+    host: str | None = None,
+    unix_sock: str | None = None,
+    port: int = 5480,
+    database: str | None = None,
+    password: str | bytes | None = None,
+    ssl: Any = None,
+    securityLevel: int = 0,
+    timeout: float | None = None,
+    application_name: str | None = None,
+    max_prepared_statements: int = 1000,
+    datestyle: str = "ISO",
+    logLevel: int = 0,
+    tcp_keepalive: bool = True,
+    char_varchar_encoding: str = "latin",
+    on_connect: Callable[[SyncConnection], Any] | None = None,
+    ssl_verify: bool = True,
+    connect_timeout: float | None = None,
+    **kwargs: Any,
+) -> Connection:
     conn = Connection()
     try:
         await conn._connect(
@@ -194,38 +251,26 @@ async def _async_connect(
 
 
 def connect(
-    user,
-    host="localhost",
-    unix_sock=None,
-    port=5480,
-    database=None,
-    password=None,
-    ssl=None,
-    securityLevel=0,
-    timeout=None,
-    application_name=None,
-    max_prepared_statements=1000,
-    datestyle="ISO",
-    logLevel=0,
-    tcp_keepalive=True,
-    char_varchar_encoding="latin",
-    on_connect=None,
-    ssl_verify=True,
-    connect_timeout=None,
-    **kwargs,
-):
-    """Synchronous connection to a Netezza database.
-
-    Example:
-        conn = nzpy.sync.connect(
-            user="admin", password="secret",
-            host="nz-host", database="mydb",
-        )
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1")
-            print(cur.fetchone())
-        conn.close()
-    """
+    user: str,
+    host: str = "localhost",
+    unix_sock: str | None = None,
+    port: int = 5480,
+    database: str | None = None,
+    password: str | None = None,
+    ssl: Any = None,
+    securityLevel: int = 0,
+    timeout: float | None = None,
+    application_name: str | None = None,
+    max_prepared_statements: int = 1000,
+    datestyle: str = "ISO",
+    logLevel: int = 0,
+    tcp_keepalive: bool = True,
+    char_varchar_encoding: str = "latin",
+    on_connect: Callable[[SyncConnection], Any] | None = None,
+    ssl_verify: bool = True,
+    connect_timeout: float | None = None,
+    **kwargs: Any,
+) -> SyncConnection:
     async_conn = _runner.run(
         _async_connect(
             user=user,
@@ -250,3 +295,6 @@ def connect(
         )
     )
     return SyncConnection(async_conn)
+
+
+__all__ = ["SyncCursor", "SyncConnection", "connect"]

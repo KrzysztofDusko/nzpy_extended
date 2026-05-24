@@ -1,8 +1,24 @@
-async def load_data(conn, table_name, rows, columns=None,
-                    delimiter='|', encoding='LATIN9',
-                    create_if_missing=True, temporary=False,
-                    distribute_on_random=True, logdir=None,
-                    escape_char='\\', quoting=None):
+from __future__ import annotations
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .core import Connection
+
+
+async def load_data(
+    conn: Connection,
+    table_name: str,
+    rows: list[Any],
+    columns: list[tuple[str, str]] | None = None,
+    delimiter: str = '|',
+    encoding: str = 'LATIN9',
+    create_if_missing: bool = True,
+    temporary: bool = False,
+    distribute_on_random: bool = True,
+    logdir: str | None = None,
+    escape_char: str | None = '\\',
+    quoting: object | None = None,
+) -> int:
     return await conn.load_data(
         table_name=table_name,
         rows=rows,

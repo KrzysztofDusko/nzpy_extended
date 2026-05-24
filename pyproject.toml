@@ -36,5 +36,53 @@ Documentation = "https://github.com/KrzysztofDusko/nzpy_extended/wiki"
 Source = "https://github.com/KrzysztofDusko/nzpy_extended"
 Tracker = "https://github.com/KrzysztofDusko/nzpy_extended/issues"
 
+[project.optional-dependencies]
+test = [
+    "pytest>=8",
+    "pytest-asyncio",
+    "pytest-timeout",
+]
+lint = [
+    "mypy>=1.13",
+    "pyright>=1.1",
+]
+
 [tool.setuptools.packages.find]
 include = ["nzpy_extended*"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = "nzpy_extended._version"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "nzpy_extended.c_ext"
+ignore_errors = true
+
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+exclude = ["nzpy_extended/_version.py"]
+reportUnknownParameterType = "warning"
+reportUnknownVariableType = "warning"
+reportUnknownMemberType = "warning"
+reportUnknownArgumentType = "warning"
+reportPrivateUsage = "warning"
+reportUnusedImport = "warning"
+reportUnnecessaryComparison = false
+reportUnnecessaryIsInstance = false
+reportConstantRedefinition = false
+reportUnusedFunction = false
+reportDeprecated = false
+reportPossiblyUnboundVariable = false
+reportGeneralTypeIssues = "error"
+reportAttributeAccessIssue = "error"
+reportUndefinedVariable = "error"
+
+[tool.setuptools.package-data]
+nzpy_extended = ["py.typed"]

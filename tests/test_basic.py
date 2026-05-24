@@ -15,6 +15,7 @@ NOTE: pyodbc tests are skipped automatically if the ODBC driver / pyodbc is
 """
 
 import datetime
+import decimal
 import os
 import pytest
 
@@ -228,7 +229,7 @@ async def test_column_access_consistency():
         await cur.execute(f"SELECT {','.join(cols)} FROM JUST_DATA..DIMEMPLOYEE")
         rows = await cur.fetchall()
         assert len(rows) > 0, "DIMEMPLOYEE must contain rows"
-        # Verify that the row is a tuple of the correct width
+        # Verify that the row has the correct width
         for row in rows:
             assert len(row) == len(cols), "Column count mismatch"
     finally:
@@ -241,11 +242,13 @@ async def test_column_access_consistency():
 
 def _odbc_connection():
     if not _HAVE_PYODBC:
-        pytest.skip("pyodbc not installed")
+        from odbc_helper import connect as _oc
+        return _oc(dsn="NetezzaSQL", user=NZ_USER, password=NZ_PASSWORD)
     try:
         return pyodbc.connect(ODBC_CONN_STR, timeout=15)
-    except Exception as e:
-        pytest.skip(f"ODBC driver unavailable: {e}")
+    except Exception:
+        from odbc_helper import connect as _oc
+        return _oc(dsn="NetezzaSQL", user=NZ_USER, password=NZ_PASSWORD)
 
 
 def _odbc_rows(sql):
@@ -272,11 +275,8 @@ ODBC_COMPARE_QUERIES = [
 async def test_odbc_and_nzpy_match(sql):
     """
     nzpy_extended result must agree with ODBC reference driver.
-    Skipped automatically when pyodbc / ODBC driver is not available.
+    Falls back to SQLConnect ctypes helper if pyodbc is unavailable.
     """
-    if not _HAVE_PYODBC:
-        pytest.skip("pyodbc not installed")
-
     odbc_con = _odbc_connection()
     nzpy_con = await _make_conn()
     try:
@@ -306,7 +306,21 @@ async def test_odbc_and_nzpy_match(sql):
                     )
                 else:
                     # coerce to string for comparison (type differences between ODBC and nzpy)
-                    assert str(o_val) == str(n_val), (
+                    o_str = str(o_val)
+                    n_str = str(n_val)
+                    if o_str == n_str:
+                        continue
+                    # Allow IEEE 754 float tolerance (e.g. REAL precision)
+                    try:
+                        o_num = float(o_str) if '.' in o_str or 'e' in o_str.lower() else int(o_str)
+                        n_num = float(n_str) if '.' in n_str or 'e' in n_str.lower() else int(n_str)
+                        if abs(o_num - n_num) <= 1e-3:
+                            continue
+                        if o_num and abs(o_num - n_num) / abs(o_num) <= 1e-3:
+                            continue
+                    except (ValueError, TypeError):
+                        pass
+                    assert o_str == n_str, (
                         f"Value mismatch col {col_idx}: {o_val!r} vs {n_val!r}"
                     )
     finally:

@@ -1,19 +1,22 @@
 import asyncio
 import base64
 import logging
+import socket as _socket
 import ssl
-import typing
 from getpass import getuser
 from hashlib import md5, sha256
 from os import getpid, path
 from platform import system
 from socket import gethostname
 from sys import argv
+from typing import Any
 
-from nzpy_extended import core
 from .buffered_stream import NzBufferedStream
+from .exceptions import InterfaceError
+from .protocol import (NULL_BYTE, ERROR_RESPONSE, AUTHENTICATION_REQUEST,
+                       NOTICE_RESPONSE, BACKEND_KEY_DATA, READY_FOR_QUERY)
+from .utils import h_pack, i_pack, i_unpack
 
-#  CP Version
 CP_VERSION_1 = 1
 CP_VERSION_2 = 2
 CP_VERSION_3 = 3
@@ -21,7 +24,6 @@ CP_VERSION_4 = 4
 CP_VERSION_5 = 5
 CP_VERSION_6 = 6
 
-#  Handshake version
 HSV2_INVALID_OPCODE = 0
 HSV2_CLIENT_BEGIN = 1
 HSV2_DB = 2
@@ -42,12 +44,10 @@ HSV2_CLIENT_OS_USER = 16
 HSV2_64BIT_VARLENA_ENABLED = 17
 HSV2_CLIENT_DONE = 1000
 
-#  PG PROTOCOL
 PG_PROTOCOL_3 = 3
 PG_PROTOCOL_4 = 4
 PG_PROTOCOL_5 = 5
 
-#  Authentication types
 AUTH_REQ_OK = 0
 AUTH_REQ_KRB4 = 1
 AUTH_REQ_KRB5 = 2
@@ -56,21 +56,18 @@ AUTH_REQ_CRYPT = 4
 AUTH_REQ_MD5 = 5
 AUTH_REQ_SHA256 = 6
 
-#  Client type
 NPS_CLIENT = 0
 IPS_CLIENT = 1
 
-#  Client type python
 NPSCLIENT_TYPE_PYTHON = 13
-
 
 
 class SyncHandshake:
 
     def __init__(
         self,
-        sock,
-        ssl_params: dict | None,
+        sock: _socket.socket | ssl.SSLSocket,
+        ssl_params: dict[str, Any] | None,
         log: logging.Logger
     ) -> None:
         self._hsVersion: int | None = None
@@ -78,7 +75,7 @@ class SyncHandshake:
         self._protocol2: int | None = None
         self._usock = sock
         self._sock = sock.makefile(mode="rwb")
-        self.ssl_params: dict | None = ssl_params
+        self.ssl_params: dict[str, Any] | None = ssl_params
         self.log: logging.Logger = log
         self.backend_pid: int | None = None
         self.backend_key: int | None = None
@@ -95,7 +92,7 @@ class SyncHandshake:
         return self._sock.read(n)
 
     def _flush(self) -> None:
-        self._sock.flush()
+        self._sock.flush()  # pyright: ignore[reportAttributeAccessIssue]
 
     def startup(
         self,
@@ -104,7 +101,7 @@ class SyncHandshake:
         user: str | bytes,
         password: str | bytes | None,
         pgOptions: str | None
-    ) -> typing.Any:
+    ) -> object:
         if not self.conn_handshake_negotiate(self._hsVersion, self._protocol2):
             self.log.info("Handshake negotiation unsuccessful")
             return False
@@ -137,8 +134,8 @@ class SyncHandshake:
 
         while True:
             self.log.debug("sending version: %s", version)
-            val = bytearray(core.h_pack(HSV2_CLIENT_BEGIN) + core.h_pack(version))
-            self._write(core.i_pack(len(val) + 4))
+            val = bytearray(h_pack(HSV2_CLIENT_BEGIN) + h_pack(version))
+            self._write(i_pack(len(val) + 4))
             self._write(val)
             self._flush()
 
@@ -211,13 +208,13 @@ class SyncHandshake:
                 db = _database
             self.log.info("Database name: %s", db.decode('utf8') if db else "")
 
-            val = bytearray(core.h_pack(HSV2_DB))
+            val = bytearray(h_pack(HSV2_DB))
             if db:
-                val.extend(db + core.NULL_BYTE)
+                val.extend(db + NULL_BYTE)
             else:
-                val.extend(core.NULL_BYTE)
+                val.extend(NULL_BYTE)
 
-            self._write(core.i_pack(len(val) + 4))
+            self._write(i_pack(len(val) + 4))
             self._write(val)
             self._flush()
 
@@ -225,7 +222,7 @@ class SyncHandshake:
         self.log.info("Backend response: %s", str(beresp, 'utf8'))
         if beresp == b'N':
             return True
-        elif beresp == core.ERROR_RESPONSE:
+        elif beresp == ERROR_RESPONSE:
             self.log.warning("ERROR_AUTHOR_BAD")
             return False
         else:
@@ -257,15 +254,15 @@ class SyncHandshake:
         ssl_context: ssl.SSLContext | None = None
 
         while information != 0:
+            opcode = information
             if information == HSV2_SSL_NEGOTIATE:
                 self.log.debug("Security Level requested = %s", currSecLevel)
-                opcode = information
 
             if information == HSV2_SSL_CONNECT:
-                opcode = information
+                pass
 
-            val = bytearray(core.h_pack(opcode) + core.i_pack(currSecLevel))
-            self._write(core.i_pack(len(val) + 4))
+            val = bytearray(h_pack(opcode) + i_pack(currSecLevel))
+            self._write(i_pack(len(val) + 4))
             self._write(val)
             self._flush()
 
@@ -288,7 +285,7 @@ class SyncHandshake:
                             ssl_context.verify_mode = ssl.CERT_REQUIRED
 
                     self._usock = ssl_context.wrap_socket(self._usock)
-                    self._sock = self._usock
+                    self._sock = self._usock  # type: ignore[assignment]
                     self.log.info("Secured Connect Success")
                 except ssl.SSLError:
                     self.log.warning("Problem establishing secured session")
@@ -313,7 +310,7 @@ class SyncHandshake:
                             ssl_context.verify_mode = ssl.CERT_REQUIRED
                         information = HSV2_SSL_CONNECT
                     except ImportError:
-                        raise core.InterfaceError("SSL required but ssl module not available in this python installation")
+                        raise InterfaceError("SSL required but ssl module not available in this python installation")
                     except ssl.SSLError:
                         if currSecLevel == 2:
                             self.log.debug("Problem establishing secured session")
@@ -345,50 +342,50 @@ class SyncHandshake:
             user = user.encode('utf8')
 
         information = HSV2_USER
-        val = bytearray(core.h_pack(information))
-        val.extend(user + core.NULL_BYTE)
+        val = bytearray(h_pack(information))
+        val.extend(user + NULL_BYTE)
         information = HSV2_PROTOCOL
 
         while information != 0:
-            self._write(core.i_pack(len(val) + 4))
+            self._write(i_pack(len(val) + 4))
             self._write(val)
             self._flush()
             beresp = self._read(1)
             self.log.info("Backend response: %s", str(beresp, "utf8"))
             if beresp == b'N':
                 if information == HSV2_PROTOCOL:
-                    val = bytearray(core.h_pack(information) + core.h_pack(_protocol1) + core.h_pack(_protocol2))
+                    val = bytearray(h_pack(information) + h_pack(_protocol1) + h_pack(_protocol2))
                     information = HSV2_REMOTE_PID
                     continue
                 if information == HSV2_REMOTE_PID:
-                    val = bytearray(core.h_pack(information) + core.i_pack(getpid()))
+                    val = bytearray(h_pack(information) + i_pack(getpid()))
                     information = HSV2_OPTIONS
                     continue
                 if information == HSV2_OPTIONS:
                     if pgOptions is not None:
-                        val = bytearray(core.h_pack(information))
-                        val.extend(pgOptions.encode('utf8') + core.NULL_BYTE)
+                        val = bytearray(h_pack(information))
+                        val.extend(pgOptions.encode('utf8') + NULL_BYTE)
                     information = HSV2_CLIENT_TYPE
                     continue
                 if information == HSV2_CLIENT_TYPE:
-                    val = bytearray(core.h_pack(information) + core.h_pack(NPSCLIENT_TYPE_PYTHON))
+                    val = bytearray(h_pack(information) + h_pack(NPSCLIENT_TYPE_PYTHON))
                     if _hsVersion in (CP_VERSION_5, CP_VERSION_6):
                         information = HSV2_64BIT_VARLENA_ENABLED
                     else:
                         information = HSV2_CLIENT_DONE
                     continue
                 if information == HSV2_64BIT_VARLENA_ENABLED:
-                    val = bytearray(core.h_pack(information) + core.h_pack(IPS_CLIENT))
+                    val = bytearray(h_pack(information) + h_pack(IPS_CLIENT))
                     information = HSV2_CLIENT_DONE
                     continue
                 if information == HSV2_CLIENT_DONE:
-                    val = bytearray(core.h_pack(information))
+                    val = bytearray(h_pack(information))
                     information = 0
-                    self._write(core.i_pack(len(val) + 4))
+                    self._write(i_pack(len(val) + 4))
                     self._write(val)
                     self._flush()
                     return True
-            elif beresp == core.ERROR_RESPONSE:
+            elif beresp == ERROR_RESPONSE:
                 self.log.warning("ERROR_CONN_FAIL")
                 return False
         return False
@@ -405,74 +402,74 @@ class SyncHandshake:
             user = user.encode('utf8')
 
         information = HSV2_USER
-        val = bytearray(core.h_pack(information))
-        val.extend(user + core.NULL_BYTE)
+        val = bytearray(h_pack(information))
+        val.extend(user + NULL_BYTE)
         information = HSV2_APPNAME
 
         while information != 0:
-            self._write(core.i_pack(len(val) + 4))
+            self._write(i_pack(len(val) + 4))
             self._write(val)
             self._flush()
             beresp = self._read(1)
             self.log.info("Backend response: %s", str(beresp, "utf8"))
             if beresp == b'N':
                 if information == HSV2_APPNAME:
-                    val = bytearray(core.h_pack(information))
-                    val.extend(self.guardium_applName.encode('utf8') + core.NULL_BYTE)
+                    val = bytearray(h_pack(information))
+                    val.extend(self.guardium_applName.encode('utf8') + NULL_BYTE)
                     self.log.debug("Appname :%s", self.guardium_applName)
                     information = HSV2_CLIENT_OS
                     continue
                 if information == HSV2_CLIENT_OS:
-                    val = bytearray(core.h_pack(information))
-                    val.extend(self.guardium_clientOS.encode('utf8') + core.NULL_BYTE)
+                    val = bytearray(h_pack(information))
+                    val.extend(self.guardium_clientOS.encode('utf8') + NULL_BYTE)
                     self.log.debug("Client OS :%s", self.guardium_clientOS)
                     information = HSV2_CLIENT_HOST_NAME
                     continue
                 if information == HSV2_CLIENT_HOST_NAME:
-                    val = bytearray(core.h_pack(information))
-                    val.extend(self.guardium_clientHostName.encode('utf8') + core.NULL_BYTE)
+                    val = bytearray(h_pack(information))
+                    val.extend(self.guardium_clientHostName.encode('utf8') + NULL_BYTE)
                     self.log.debug("Client hostname :%s", self.guardium_clientHostName)
                     information = HSV2_CLIENT_OS_USER
                     continue
                 if information == HSV2_CLIENT_OS_USER:
-                    val = bytearray(core.h_pack(information))
-                    val.extend(self.guardium_clientOSUser.encode('utf8') + core.NULL_BYTE)
+                    val = bytearray(h_pack(information))
+                    val.extend(self.guardium_clientOSUser.encode('utf8') + NULL_BYTE)
                     self.log.debug("Client OS user :%s", self.guardium_clientOSUser)
                     information = HSV2_PROTOCOL
                     continue
                 if information == HSV2_PROTOCOL:
-                    val = bytearray(core.h_pack(information) + core.h_pack(_protocol1) + core.h_pack(_protocol2))
+                    val = bytearray(h_pack(information) + h_pack(_protocol1) + h_pack(_protocol2))
                     information = HSV2_REMOTE_PID
                     continue
                 if information == HSV2_REMOTE_PID:
-                    val = bytearray(core.h_pack(information) + core.i_pack(getpid()))
+                    val = bytearray(h_pack(information) + i_pack(getpid()))
                     information = HSV2_OPTIONS
                     continue
                 if information == HSV2_OPTIONS:
                     if pgOptions is not None:
-                        val = bytearray(core.h_pack(information))
-                        val.extend(pgOptions.encode('utf8') + core.NULL_BYTE)
+                        val = bytearray(h_pack(information))
+                        val.extend(pgOptions.encode('utf8') + NULL_BYTE)
                     information = HSV2_CLIENT_TYPE
                     continue
                 if information == HSV2_CLIENT_TYPE:
-                    val = bytearray(core.h_pack(information) + core.h_pack(NPSCLIENT_TYPE_PYTHON))
+                    val = bytearray(h_pack(information) + h_pack(NPSCLIENT_TYPE_PYTHON))
                     if _hsVersion in (CP_VERSION_5, CP_VERSION_6):
                         information = HSV2_64BIT_VARLENA_ENABLED
                     else:
                         information = HSV2_CLIENT_DONE
                     continue
                 if information == HSV2_64BIT_VARLENA_ENABLED:
-                    val = bytearray(core.h_pack(information) + core.h_pack(IPS_CLIENT))
+                    val = bytearray(h_pack(information) + h_pack(IPS_CLIENT))
                     information = HSV2_CLIENT_DONE
                     continue
                 if information == HSV2_CLIENT_DONE:
-                    val = bytearray(core.h_pack(information))
+                    val = bytearray(h_pack(information))
                     information = 0
-                    self._write(core.i_pack(len(val) + 4))
+                    self._write(i_pack(len(val) + 4))
                     self._write(val)
                     self._flush()
                     return True
-            elif beresp == core.ERROR_RESPONSE:
+            elif beresp == ERROR_RESPONSE:
                 self.log.warning("ERROR_CONN_FAIL")
                 return False
         return False
@@ -484,12 +481,12 @@ class SyncHandshake:
         beresp = self._read(1)
         self.log.debug("Got response: %s", beresp)
 
-        if beresp != core.AUTHENTICATION_REQUEST:
+        if beresp != AUTHENTICATION_REQUEST:
             self.log.warning("Authentication error")
             return False
 
         self.log.debug("auth got 'R' - request for password")
-        areq = core.i_unpack(self._read(4))[0]
+        areq = i_unpack(self._read(4))[0]
         self.log.debug("areq =%s", areq)
 
         if areq == AUTH_REQ_OK:
@@ -499,9 +496,9 @@ class SyncHandshake:
         if areq == AUTH_REQ_PASSWORD:
             self.log.info("Plain password requested")
             if password is None:
-                raise core.InterfaceError("server requesting password authentication, but no password was provided")
-            self._write(core.i_pack(len(password + core.NULL_BYTE) + 4))
-            self._write(password + core.NULL_BYTE)
+                raise InterfaceError("server requesting password authentication, but no password was provided")
+            self._write(i_pack(len(password + NULL_BYTE) + 4))
+            self._write(password + NULL_BYTE)
             self._flush()
 
         elif areq == AUTH_REQ_MD5:
@@ -509,7 +506,7 @@ class SyncHandshake:
             salt = self._read(2)
             self.log.debug("Salt =%s", salt)
             if password is None:
-                raise core.InterfaceError(
+                raise InterfaceError(
                     "server requesting MD5 password authentication, "
                     "but no password was provided")
             md5encoded = md5(salt + password)
@@ -517,8 +514,8 @@ class SyncHandshake:
             pwd = md5pwd.rstrip(b"=")
             self.log.debug("md5 encrypted password is =%s", pwd)
 
-            self._write(core.i_pack(len(pwd + core.NULL_BYTE) + 4))
-            self._write(pwd + core.NULL_BYTE)
+            self._write(i_pack(len(pwd + NULL_BYTE) + 4))
+            self._write(pwd + NULL_BYTE)
             self._flush()
 
         elif areq == AUTH_REQ_SHA256:
@@ -526,7 +523,7 @@ class SyncHandshake:
             salt = self._read(2)
             self.log.debug("Salt =%s", salt)
             if password is None:
-                raise core.InterfaceError("server requesting SHA256 password "
+                raise InterfaceError("server requesting SHA256 password "
                                      "authentication, but no password "
                                      "was provided")
             sha256encoded = sha256(salt + password)
@@ -534,8 +531,8 @@ class SyncHandshake:
             pwd = sha256pwd.rstrip(b"=")
             self.log.debug("sha256 encrypted password is =%s", pwd)
 
-            self._write(core.i_pack(len(pwd + core.NULL_BYTE) + 4))
-            self._write(pwd + core.NULL_BYTE)
+            self._write(i_pack(len(pwd + NULL_BYTE) + 4))
+            self._write(pwd + NULL_BYTE)
             self._flush()
 
         elif areq == AUTH_REQ_KRB5:
@@ -544,34 +541,51 @@ class SyncHandshake:
         return True
 
     def conn_connection_complete(self) -> bool:
+        length = 0
         while True:
             response = self._read(1)
             self.log.info("backend response: %s", str(response, 'utf8'))
 
-            if response != core.AUTHENTICATION_REQUEST:
+            if response != AUTHENTICATION_REQUEST:
                 self._read(4)
-                length = core.i_unpack(self._read(4))[0]
+                length = i_unpack(self._read(4))[0]
 
-            if response == core.AUTHENTICATION_REQUEST:
-                areq = core.i_unpack(self._read(4))[0]
+            if response == AUTHENTICATION_REQUEST:
+                areq = i_unpack(self._read(4))[0]
                 self.log.info("backend response: %s", areq)
 
-            if response == core.NOTICE_RESPONSE:
+            if response == NOTICE_RESPONSE:
                 notices = str(self._read(length), 'utf8')
                 self.log.debug("Response received from backend: %s", notices)
 
-            if response == core.BACKEND_KEY_DATA:
-                self.backend_pid = core.i_unpack(self._read(4))[0]
+            if response == BACKEND_KEY_DATA:
+                self.backend_pid = i_unpack(self._read(4))[0]
                 self.log.debug("Backend response PID: %s", self.backend_pid)
 
-                self.backend_key = core.i_unpack(self._read(4))[0]
+                self.backend_key = i_unpack(self._read(4))[0]
                 self.log.debug("Backend response KEY: %s", self.backend_key)
 
-            if response == core.READY_FOR_QUERY:
+            if response == READY_FOR_QUERY:
                 self.log.info("Authentication Successful")
                 return True
 
-            if response == core.ERROR_RESPONSE:
+            if response == ERROR_RESPONSE:
                 error = str(self._read(length), 'utf8')
                 self.log.warning("Error occured, server response:%s", error)
                 return False
+
+
+__all__ = [
+    "SyncHandshake",
+    "CP_VERSION_1", "CP_VERSION_2", "CP_VERSION_3", "CP_VERSION_4",
+    "CP_VERSION_5", "CP_VERSION_6",
+    "HSV2_INVALID_OPCODE", "HSV2_CLIENT_BEGIN", "HSV2_DB", "HSV2_USER",
+    "HSV2_OPTIONS", "HSV2_TTY", "HSV2_REMOTE_PID", "HSV2_PRIOR_PID",
+    "HSV2_CLIENT_TYPE", "HSV2_PROTOCOL", "HSV2_HOSTCASE", "HSV2_SSL_NEGOTIATE",
+    "HSV2_SSL_CONNECT", "HSV2_APPNAME", "HSV2_CLIENT_OS", "HSV2_CLIENT_HOST_NAME",
+    "HSV2_CLIENT_OS_USER", "HSV2_64BIT_VARLENA_ENABLED", "HSV2_CLIENT_DONE",
+    "PG_PROTOCOL_3", "PG_PROTOCOL_4", "PG_PROTOCOL_5",
+    "AUTH_REQ_OK", "AUTH_REQ_KRB4", "AUTH_REQ_KRB5", "AUTH_REQ_PASSWORD",
+    "AUTH_REQ_CRYPT", "AUTH_REQ_MD5", "AUTH_REQ_SHA256",
+    "NPS_CLIENT", "IPS_CLIENT", "NPSCLIENT_TYPE_PYTHON",
+]

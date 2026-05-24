@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import stat
 import tempfile
@@ -12,6 +14,7 @@ import socket
 import asyncio
 from calendar import timegm
 from collections import defaultdict, deque
+from collections.abc import AsyncGenerator, Callable, Generator
 from copy import deepcopy
 from datetime import (date, datetime as Datetime, time, timedelta as Timedelta)
 from datetime import timezone as Timezone
@@ -24,15 +27,16 @@ from json import dumps, loads
 from os import path
 from struct import Struct
 from time import localtime
+from typing import Any
 from uuid import UUID
 from warnings import warn
 
 import nzpy_extended
 
 from . import handshake
+from ._constants import DEFAULT_BUFFER_SIZE
 from .buffered_stream import NzBufferedStream
 
-# ── C extension detection ──────────────────────────────────────────────
 _FORCE_PURE_PYTHON = os.environ.get("NZPY_EXTENDED_NO_CEXT", "").lower() in ("1", "true", "yes")
 
 if _FORCE_PURE_PYTHON:
@@ -40,15 +44,12 @@ if _FORCE_PURE_PYTHON:
     _c_ext = None
 else:
     try:
-        from . import c_ext as _c_ext
+        from . import c_ext as _c_ext  # type: ignore[attr-defined,no-redef]
         _HAVE_C_EXT = True
     except ImportError:
         _HAVE_C_EXT = False
         _c_ext = None
 
-__author__ = "Mathieu Fenniak"
-
-# ── Re-exports from sub-modules ───────────────────────────────────────
 from .exceptions import (Warning, Error, InterfaceError,
                          ConnectionClosedError, DatabaseError, DataError,
                          OperationalError, IntegrityError, InternalError,
@@ -158,7 +159,49 @@ from .utils import (pack_funcs, i_pack, i_unpack, h_pack, h_unpack,
 arr_trans = dict(zip(map(ord, "[] 'u"), list('{}') + [None] * 3))
 
 
-class Connection():
+class Connection:
+    _sock: Any
+    _usock: Any
+    _stream: NzBufferedStream | None
+    in_transaction: bool
+    error: Any
+    _ext_table_source: Any
+    _command_generation: int
+    _char_varchar_encoding: str
+    _client_encoding: str
+    _commands_with_count: tuple[bytes, ...]
+    notifications: deque[Any]
+    parameter_statuses: deque[Any]
+    max_prepared_statements: int
+    log: logging.Logger
+    user: bytes
+    password: bytes | None
+    autocommit: bool
+    _caches: dict[str, Any]
+    commandNumber: int
+    status: int | None
+    _host: str | None
+    _port: int
+    _unix_sock: str | None
+    _backend_pid: int | None
+    _backend_key: int | None
+    _read: Callable[[int], Any]
+    _write: Callable[[bytes | bytearray], Any]
+    _flush: Callable[[], Any]
+    _backend_key_data: Any
+    _dirty_socket: bool
+    pg_types: defaultdict[Any, Any]
+    py_types: dict[Any, Any] = {}
+    inspect_funcs: dict[Any, Any] = {}
+    message_types: dict[Any, Any]
+    _cursor: Cursor
+    _active_generator: Any
+    _active_cursor: Any
+    _cached_header: Any
+    _copy_done: bool
+    _server_version: Any
+    tupdesc: Any
+
     Warning = property(lambda self: self._getError(Warning))
     Error = property(lambda self: self._getError(Error))
     InterfaceError = property(lambda self: self._getError(InterfaceError))
@@ -172,10 +215,10 @@ class Connection():
     NotSupportedError = property(
         lambda self: self._getError(NotSupportedError))
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> Connection:
         return self
 
-    async def __aexit__(self, exc_type, exc_value, traceback):
+    async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> None:
         if exc_type:
             try:
                 await self.rollback()
@@ -191,24 +234,24 @@ class Connection():
         except ConnectionClosedError:
             pass
 
-    def __del__(self):
+    def __del__(self) -> None:
         try:
             if hasattr(self, '_sock') and self._sock is not None:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    asyncio.create_task(self.close())
-                else:
-                    loop.run_until_complete(self.close())
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(self.close())
+                except RuntimeError:
+                    pass
         except (ConnectionClosedError, RuntimeError):
             pass
 
-    def _getError(self, error):
+    def _getError(self, error: type) -> type:
         warn(
             "DB-API extension connection.%s used" %
             error.__name__, stacklevel=3)
         return error
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._sock = None
         self._usock = None
         self._stream = None
@@ -216,13 +259,18 @@ class Connection():
         self.error = None
         self._ext_table_source = None
         self._command_generation = 0
+        self._buffer_size = DEFAULT_BUFFER_SIZE
 
     async def _connect(
-            self, user, host, unix_sock, port, database, password, ssl,
-            securityLevel, timeout, application_name,
-            max_prepared_statements, datestyle, logLevel, tcp_keepalive,
-            char_varchar_encoding, logOptions=LogOptions.Inherit,
-            pgOptions=None, ssl_verify=True, connect_timeout=None):
+            self, user: str | bytes, host: str | None, unix_sock: str | None, port: int,
+            database: str | None, password: str | bytes | None, ssl: Any,
+            securityLevel: int, timeout: float | None, application_name: str | None,
+            max_prepared_statements: int, datestyle: str, logLevel: int, tcp_keepalive: bool,
+            char_varchar_encoding: str, logOptions: LogOptions = LogOptions.Inherit,
+            pgOptions: str | None = None, ssl_verify: bool = True,
+            connect_timeout: float | None = None,
+            buffer_size: int = DEFAULT_BUFFER_SIZE) -> None:
+        self._buffer_size = buffer_size
         self._char_varchar_encoding = char_varchar_encoding
         self._client_encoding = "utf8"
         self._commands_with_count = (
@@ -319,7 +367,7 @@ class Connection():
 
         self._usock.setblocking(True)
         if not isinstance(ssl, dict):
-            hs_ssl = {}
+            hs_ssl: dict[str, Any] = {}
         else:
             hs_ssl = dict(ssl)
         hs_ssl.setdefault('ssl_verify', ssl_verify)
@@ -335,15 +383,19 @@ class Connection():
         self._backend_key = hs.backend_key
         self._usock.setblocking(False)
 
-        self._stream = NzBufferedStream(self._usock)
+        self._stream = NzBufferedStream(self._usock, max_size=self._buffer_size,
+                                        buffer_size=self._buffer_size)
 
-        async def _read(n):
-            return await self._stream.read(n)
+        stream = self._stream
+        assert stream is not None
 
-        async def _write(data):
-            await self._stream.write(data)
+        async def _read(n: int) -> bytes:
+            return await stream.read(n)
 
-        async def _flush():
+        async def _write(data: bytes | bytearray) -> None:
+            await stream.write(data)
+
+        async def _flush() -> None:
             pass
 
         self._read = _read
@@ -352,26 +404,26 @@ class Connection():
         self._backend_key_data = None
         self._dirty_socket = False
 
-        def text_out(v):
+        def text_out(v: str) -> bytes:
             return v.encode(self._client_encoding)
 
-        def enum_out(v):
+        def enum_out(v: enum.Enum) -> bytes:
             return str(v.value).encode(self._client_encoding)
 
-        def time_out(v):
+        def time_out(v: time) -> bytes:
             return v.isoformat().encode(self._client_encoding)
 
-        def date_out(v):
+        def date_out(v: date) -> bytes:
             return v.isoformat().encode(self._client_encoding)
 
-        def unknown_out(v):
+        def _unknown_out(v: object) -> bytes:
             return str(v).encode(self._client_encoding)
 
-        def array_in(data, idx, length):
+        def array_in(data: bytes, idx: int, length: int) -> list[Any]:
             text = data[idx:idx + length].decode(self._client_encoding)
 
-            def parse_array(s, pos):
-                result = []
+            def parse_array(s: str, pos: int) -> tuple[list[Any], int]:
+                result: list[Any] = []
                 while pos < len(s) and s[pos].isspace():
                     pos += 1
                 if pos >= len(s) or s[pos] != '{':
@@ -407,19 +459,19 @@ class Connection():
             arr, _ = parse_array(text, 0)
             return arr
 
-        def array_recv(data, idx, length):
+        def array_recv(data: bytes, idx: int, length: int) -> list[Any]:
             final_idx = idx + length
-            dim, hasnull, typeoid = iii_unpack(data, idx)
+            dim, _hasnull, typeoid = iii_unpack(data, idx)
             idx += 12
 
             conversion = self.pg_types[typeoid][1]
 
-            dim_lengths = []
-            for i in range(dim):
+            dim_lengths: list[int] = []
+            for _ in range(dim):
                 dim_lengths.append(ii_unpack(data, idx)[0])
                 idx += 8
 
-            values = []
+            values: list[Any] = []
             while idx < final_idx:
                 element_len, = i_unpack(data, idx)
                 idx += 4
@@ -433,22 +485,22 @@ class Connection():
                 values = list(map(list, zip(*[iter(values)] * length)))
             return values
 
-        def vector_in(data, idx, length):
+        def vector_in(data: bytes, idx: int, length: int) -> list[int]:
             text = data[idx:idx + length].decode(self._client_encoding)
             return [int(x) for x in text.replace(',', ' ').split()]
 
-        def text_recv(data, offset, length):
+        def text_recv(data: bytes, offset: int, length: int) -> str:
             view = memoryview(data)
             return str(view[offset: offset + length], self._client_encoding)
 
-        def bool_recv(data, offset, length):
+        def bool_recv(data: bytes, offset: int, length: int) -> bool:
             return data[offset] == 116
 
-        def json_in(data, offset, length):
+        def json_in(data: bytes, offset: int, length: int) -> Any:
             return loads(
                 str(data[offset: offset + length], self._client_encoding))
 
-        def time_in(data, offset, length):
+        def time_in(data: bytes, offset: int, length: int) -> time:
             hour = int(data[offset:offset + 2])
             minute = int(data[offset + 3:offset + 5])
             sec = Decimal(
@@ -456,18 +508,18 @@ class Connection():
             return time(
                 hour, minute, int(sec), int((sec - int(sec)) * 1000000))
 
-        def date_in(data, offset, length):
+        def date_in(data: bytes, offset: int, length: int) -> date | str:
             d = data[offset:offset + length].decode(self._client_encoding)
             try:
                 return date(int(d[:4]), int(d[5:7]), int(d[8:10]))
             except ValueError:
                 return d
 
-        def numeric_in(data, offset, length):
+        def numeric_in(data: bytes, offset: int, length: int) -> Decimal:
             return Decimal(
                 data[offset: offset + length].decode(self._client_encoding))
 
-        def numeric_out(d):
+        def numeric_out(d: Decimal) -> bytes:
             return str(d).encode(self._client_encoding)
 
         self.pg_types = defaultdict(
@@ -546,10 +598,10 @@ class Connection():
         self.py_types[str] = (705, FC_TEXT, text_out)
         self.py_types[enum.Enum] = (705, FC_TEXT, enum_out)
 
-        def inet_out(v):
+        def inet_out(v: object) -> bytes:
             return str(v).encode(self._client_encoding)
 
-        def inet_in(data, offset, length):
+        def inet_in(data: bytes, offset: int, length: int) -> IPv4Address | IPv6Address | IPv4Network | IPv6Network:
             inet_str = data[offset: offset + length].decode(
                 self._client_encoding)
             if '/' in inet_str:
@@ -563,7 +615,7 @@ class Connection():
         self.py_types[IPv6Network] = (869, FC_TEXT, inet_out)
         self.pg_types[869] = (FC_TEXT, inet_in)
 
-        async def conn_send_query():
+        async def conn_send_query() -> bool:
 
             if not await self.execute(self._cursor, "set nz_encoding to "
                                                "'utf8'", None):
@@ -605,7 +657,7 @@ class Connection():
                                                "encoding as ccsid "
                                                "from _v_database "
                                                "where objid = current_db",
-                                 None):
+                                  None):
                 return False
             else:
                 results = await self._cursor.fetchall()
@@ -615,7 +667,7 @@ class Connection():
             if not await self.execute(self._cursor, "select feature from "
                                                "_v_odbc_feature "
                                                "where spec_level = '3.5'",
-                                 None):
+                                  None):
                 return False
             else:
                 results = await self._cursor.fetchall()
@@ -668,7 +720,7 @@ class Connection():
         await self._read(4)
         self.status = None
 
-    async def handle_ERROR_RESPONSE(self, data, ps):
+    async def handle_ERROR_RESPONSE(self, data: bytes, ps: Any) -> None:
         msg = dict(
             (
                 s[:1].decode(self._client_encoding),
@@ -676,6 +728,7 @@ class Connection():
             data.split(NULL_BYTE) if s != b'')
 
         response_code = msg.get(RESPONSE_CODE, '')
+        cls: type[Error]
         if response_code == '28000':
             cls = InterfaceError
         elif response_code == '23505':
@@ -691,43 +744,43 @@ class Connection():
 
         self.error = cls(msg)
 
-    async def handle_EMPTY_QUERY_RESPONSE(self, data, ps):
+    async def handle_EMPTY_QUERY_RESPONSE(self, data: bytes, ps: Any) -> None:
         self.error = ProgrammingError("query was empty")
 
-    async def handle_CLOSE_COMPLETE(self, data, ps):
+    async def handle_CLOSE_COMPLETE(self, data: bytes, ps: Any) -> None:
         pass
 
-    async def handle_PARSE_COMPLETE(self, data, ps):
+    async def handle_PARSE_COMPLETE(self, data: bytes, ps: Any) -> None:
         pass
 
-    async def handle_BIND_COMPLETE(self, data, ps):
+    async def handle_BIND_COMPLETE(self, data: bytes, ps: Any) -> None:
         pass
 
-    async def handle_PORTAL_SUSPENDED(self, data, cursor):
+    async def handle_PORTAL_SUSPENDED(self, data: bytes, cursor: Any) -> None:
         pass
 
-    async def handle_PARAMETER_DESCRIPTION(self, data, ps):
+    async def handle_PARAMETER_DESCRIPTION(self, data: bytes, ps: Any) -> None:
         pass
 
-    async def handle_COPY_DONE(self, data, ps):
+    async def handle_COPY_DONE(self, data: bytes, ps: Any) -> None:
         self._copy_done = True
 
-    async def handle_COPY_OUT_RESPONSE(self, data, ps):
-        is_binary, num_cols = bh_unpack(data)
+    async def handle_COPY_OUT_RESPONSE(self, data: bytes, ps: Any) -> None:
+        _, _ = bh_unpack(data)
         if ps.stream is None:
             raise InterfaceError(
                 "An output stream is required for the COPY OUT response.")
 
-    async def handle_COPY_DATA(self, data, ps):
+    async def handle_COPY_DATA(self, data: bytes, ps: Any) -> None:
         await asyncio.to_thread(ps.stream.write, data)
 
-    async def handle_COPY_IN_RESPONSE(self, data, ps):
-        is_binary, num_cols = bh_unpack(data)
+    async def handle_COPY_IN_RESPONSE(self, data: bytes, ps: Any) -> None:
+        _, _ = bh_unpack(data)
         if ps.stream is None:
             raise InterfaceError(
                 "An input stream is required for the COPY IN response.")
 
-        bffr = bytearray(8192)
+        bffr = bytearray(self._buffer_size)
         while True:
             bytes_read = await asyncio.to_thread(ps.stream.readinto, bffr)
             if bytes_read == 0:
@@ -740,7 +793,7 @@ class Connection():
         await self._write(SYNC_MSG)
         await self._flush()
 
-    async def handle_NOTIFICATION_RESPONSE(self, data, ps):
+    async def handle_NOTIFICATION_RESPONSE(self, data: bytes, ps: Any) -> None:
         backend_pid = i_unpack(data)[0]
         idx = 4
         null = data.find(NULL_BYTE, idx) - idx
@@ -750,18 +803,18 @@ class Connection():
 
         self.notifications.append((backend_pid, condition))
 
-    def cursor(self):
+    def cursor(self) -> Cursor:
         return Cursor(self)
 
-    async def commit(self):
+    async def commit(self) -> None:
         await self.execute(self._cursor, "commit", None)
 
-    async def rollback(self):
+    async def rollback(self) -> None:
         if not self.in_transaction:
             return
         await self.execute(self._cursor, "rollback", None)
 
-    async def close(self):
+    async def close(self) -> None:
         if getattr(self, '_usock', None) is None:
             return
 
@@ -788,7 +841,7 @@ class Connection():
 
         self._sock = None
 
-    async def cancel(self, exec_gen=None):
+    async def cancel(self, exec_gen: int | None = None) -> None:
         if getattr(self, '_backend_pid', None) is None or getattr(self, '_backend_key', None) is None:
             return
 
@@ -821,11 +874,11 @@ class Connection():
         except Exception as e:
             self.log.warning("Could not send cancel request: %s", str(e))
 
-    async def load_data(self, table_name, rows, columns=None,
-                        delimiter='|', encoding='LATIN9',
-                        create_if_missing=True, temporary=False,
-                        distribute_on_random=True, logdir=None,
-                        escape_char='\\', quoting=None):
+    async def load_data(self, table_name: str, rows: list[Any], columns: list[tuple[str, str]] | None = None,
+                        delimiter: str = '|', encoding: str = 'LATIN9',
+                        create_if_missing: bool = True, temporary: bool = False,
+                        distribute_on_random: bool = True, logdir: str | None = None,
+                        escape_char: str | None = '\\', quoting: object | None = None) -> int:
         if logdir is None:
             logdir = tempfile.gettempdir()
 
@@ -875,25 +928,26 @@ class Connection():
         await cur.execute(sql)
         return cur.rowcount
 
-    async def handle_READY_FOR_QUERY(self, data, ps):
+    async def handle_READY_FOR_QUERY(self, data: bytes, ps: Any) -> None:
         self.in_transaction = data != IDLE
 
-    def inspect_datetime(self, value):
+    def inspect_datetime(self, value: Datetime) -> Any:
         if value.tzinfo is None:
             return self.py_types[1114]
         else:
             return self.py_types[1184]
 
-    def inspect_int(self, value):
+    def inspect_int(self, value: int) -> Any | None:
         if min_int2 < value < max_int2:
             return self.py_types[21]
         if min_int4 < value < max_int4:
             return self.py_types[23]
         if min_int8 < value < max_int8:
             return self.py_types[20]
+        return None
 
-    def make_params(self, values):
-        params = []
+    def make_params(self, values: tuple[Any, ...]) -> tuple[Any, ...]:
+        params: list[Any] = []
         for value in values:
             typ = type(value)
             try:
@@ -930,21 +984,21 @@ class Connection():
 
         return tuple(params)
 
-    async def handle_ROW_DESCRIPTION(self, data, cursor):
+    async def handle_ROW_DESCRIPTION(self, data: bytes, cursor: Cursor) -> None:
         count = h_unpack(data)[0]
         idx = 2
-        for i in range(count):
+        for _ in range(count):
             name = data[idx:data.find(NULL_BYTE, idx)]
             idx += len(name) + 1
-            field = dict(zip(("type_oid", "type_size", "type_modifier",
+            field: dict[str, Any] = dict(zip(("type_oid", "type_size", "type_modifier",
                               "format"), ihic_unpack(data, idx)))
             field['name'] = name
             idx += 11
-            cursor.ps['row_desc'].append(field)
+            cursor.ps['row_desc'].append(field)  # type: ignore[index]
             field['nzpy_extended_fc'] = self.pg_types[field['type_oid']][0]
             field['func'] = self.pg_types[field['type_oid']][1]
 
-    async def Prepare(self, cursor, query, vals):
+    async def Prepare(self, cursor: Cursor, query: str, vals: Any) -> str:
         statement, make_args = convert_paramstyle(nzpy_extended.paramstyle, query)
         args = tuple(make_args(vals))
         if len(args) >= 65536:
@@ -957,7 +1011,7 @@ class Connection():
             self.log.warning("got %d parameters but the statement requires %d", len(args), expected_args)
         return rendered_query
 
-    async def _drain_protocol_generator(self, generator):
+    async def _drain_protocol_generator(self, generator: Any) -> None:
         if generator is None:
             return
         try:
@@ -968,7 +1022,8 @@ class Connection():
         finally:
             self._active_generator = None
 
-    async def _drain_socket(self):
+    async def _drain_socket(self) -> None:
+        assert self._stream is not None
         self.log.debug("Draining dirty socket stream...")
         try:
             cached_header = None
@@ -1066,7 +1121,7 @@ class Connection():
         except Exception as e:
             self.log.warning("Error during socket draining: %s", e)
 
-    async def execute(self, cursor, query, vals):
+    async def execute(self, cursor: Cursor, query: str, vals: Any) -> str | None:
         active_gen = getattr(self, '_active_generator', None)
         if active_gen is not None:
             old_cursor = getattr(self, '_active_cursor', None)
@@ -1083,7 +1138,7 @@ class Connection():
 
         self._command_generation += 1
         self.error = None
-        cursor.notices = []
+        cursor.notices = deque()
         cursor._row_count = -1
         cursor._has_rows = False
         cursor.ps = {'row_desc': []}
@@ -1105,10 +1160,8 @@ class Connection():
         if self.commandNumber > 100000:
             self.commandNumber = 1
 
-        if query is not None:
-            if isinstance(query, str):
-                query = query.encode('utf8')
-        buf.extend(query + NULL_BYTE)
+        query_bytes = query.encode('utf8')
+        buf.extend(query_bytes + NULL_BYTE)
         await self._write(buf)
         await self._flush()
 
@@ -1158,12 +1211,14 @@ class Connection():
             cursor._has_rows = len(cursor._cached_rows) > 0
         return response
 
-    async def _connNextResultSetGenerator(self, cursor):
+    async def _connNextResultSetGenerator(self, cursor: Cursor) -> AsyncGenerator[str, None]:
+        stream = self._stream
+        assert stream is not None
         fname = None
         fh = None
         self._cached_header = None
 
-        while (1):
+        while True:
             if self._cached_header is not None:
                 header = self._cached_header
                 self._cached_header = None
@@ -1231,17 +1286,18 @@ class Connection():
                 yield "ROW_DESCRIPTION"
                 continue
             if response == b"Y":
-                inner_header = self._stream.read_view_sync(8)
+                inner_header = stream.read_view_sync(8)
                 if inner_header is None:
                     inner_header = await self._read(8)
                 tup_len = i_unpack(inner_header, 4)[0]
-                data = self._stream.read_view_sync(tup_len)
+                data = stream.read_view_sync(tup_len)
                 if data is None:
                     data = await self._read(tup_len)
-                self._process_dbos_payload(cursor, self.tupdesc, data)
+                self._process_dbos_payload(cursor, self.tupdesc, bytes(data))
 
                 if _HAVE_C_EXT:
-                    view = self._stream.read_available_view()
+                    assert _c_ext is not None
+                    view = stream.read_available_view()
                     if view is not None and len(view) > 13:
                         rows, consumed = _c_ext.process_dbos_batch(
                             view,
@@ -1252,9 +1308,9 @@ class Connection():
                         )
                         if rows:
                             cursor._cached_rows.extend(rows)
-                            self._stream.advance_head(consumed)
+                            stream.advance_head(consumed)
 
-                header = self._stream.read_view_sync(5)
+                header = stream.read_view_sync(5)
                 if header is None:
                     header = await self._read(5)
                 self._cached_header = header
@@ -1274,7 +1330,7 @@ class Connection():
                     if is_fifo:
                         fh = await asyncio.to_thread(open, fname, "wb")
                     else:
-                        fh = await asyncio.to_thread(open, fname, "wb+")
+                        fh = await asyncio.to_thread(open, fname, "wb+")  # type: ignore[arg-type]
                     self.log.debug("Successfully opened file: %s", fname)
                     buf = bytearray(i_pack(0))
                     await self._write(buf)
@@ -1322,9 +1378,9 @@ class Connection():
                     notice = notice[len('NOTICE:'):]
                 notice = notice.strip().rstrip('\x00')
                 cursor.notices.append(notice)
-                if getattr(cursor, 'notice_handler', None) and callable(cursor.notice_handler):
+                if getattr(cursor, 'notice_handler', None) and callable(cursor.notice_handler):  # type: ignore[attr-defined]
                     try:
-                        cursor.notice_handler(notice)
+                                                cursor.notice_handler(notice)  # type: ignore[attr-defined]
                     except Exception as e:
                         self.log.warning("Error in notice_handler: %s", e)
                 self.log.debug("Response received from backend:%s", notice)
@@ -1337,9 +1393,9 @@ class Connection():
                     notice = notice[len('NOTICE:'):]
                 notice = notice.strip().rstrip('\x00')
                 cursor.notices.append(notice)
-                if getattr(cursor, 'notice_handler', None) and callable(cursor.notice_handler):
+                if getattr(cursor, 'notice_handler', None) and callable(cursor.notice_handler):  # type: ignore[attr-defined]
                     try:
-                        cursor.notice_handler(notice)
+                                                cursor.notice_handler(notice)  # type: ignore[attr-defined]
                     except Exception as e:
                         self.log.warning("Error in notice_handler: %s", e)
                 self.log.debug("Response received from backend:%s", notice)
@@ -1351,7 +1407,7 @@ class Connection():
                 await self._read(length)
                 continue
 
-    def Res_get_dbos_column_descriptions(self, data, tupdesc):
+    def Res_get_dbos_column_descriptions(self, data: bytes, tupdesc: DbosTupleDesc) -> None:
         data_idx = 0
         tupdesc.version = i_unpack(data, data_idx)[0]
         tupdesc.nullsAllowed = i_unpack(data, data_idx + 4)[0]
@@ -1364,7 +1420,10 @@ class Connection():
         tupdesc.numFields = i_unpack(data, data_idx + 32)[0]
 
         data_idx += 36
-        for ix in range(tupdesc.numFields):
+        nfields = tupdesc.numFields
+        if nfields is None:
+            return
+        for _ in range(nfields):
             tupdesc.field_type.append(i_unpack(data, data_idx)[0])
             tupdesc.field_size.append(i_unpack(data, data_idx + 4)[0])
             tupdesc.field_trueSize.append(i_unpack(data, data_idx + 8)[0])
@@ -1379,11 +1438,12 @@ class Connection():
         tupdesc.DateStyle = i_unpack(data, data_idx)[0]
         tupdesc.EuroDates = i_unpack(data, data_idx + 4)[0]
 
-    def _process_dbos_payload(self, cursor, tupdesc, data):
+    def _process_dbos_payload(self, cursor: Cursor, tupdesc: DbosTupleDesc, data: bytes) -> None:
         numFields = tupdesc.numFields
         mv = memoryview(data)
 
         if _HAVE_C_EXT:
+            assert _c_ext is not None
             row = _c_ext.process_dbos_row(
                 data,
                 tupdesc.field_type, tupdesc.field_size, tupdesc.field_trueSize,
@@ -1396,20 +1456,25 @@ class Connection():
 
         self._build_dbos_row_python(cursor, tupdesc, mv, data)
 
-    def _build_dbos_row_python(self, cursor, tupdesc, mv, data):
+    def _build_dbos_row_python(self, cursor: Cursor, tupdesc: DbosTupleDesc, mv: memoryview, data: bytes) -> None:
         import struct
         numFields = tupdesc.numFields
+        if numFields is None:
+            return
+        nfields: int = numFields
 
-        bitmaplen = numFields // 8
-        if (numFields % 8) > 0:
+        bitmaplen = nfields // 8
+        if (nfields % 8) > 0:
             bitmaplen += 1
 
         b_data = mv[2:2+bitmaplen]
         bitmap = [(b >> j) & 1 for b in b_data for j in range(8)]
 
-        var_offsets = []
+        var_offsets: list[int] = []
         current_voff = tupdesc.fixedFieldsSize
-        for _ in range(tupdesc.numVaryingFields):
+        if current_voff is None:
+            return
+        for _ in range(tupdesc.numVaryingFields if tupdesc.numVaryingFields is not None else 0):
             var_offsets.append(current_voff)
             if current_voff + 2 <= len(data):
                 vlen = h_le_unpack(data, current_voff)[0]
@@ -1420,9 +1485,9 @@ class Connection():
 
         field_lf = 0
         cur_field = 0
-        row = []
+        row: list[Any] = []
 
-        while field_lf < numFields and cur_field < numFields:
+        while field_lf < nfields and cur_field < nfields:
 
             if bitmap[tupdesc.field_physField[field_lf]] == 1 and tupdesc.nullsAllowed != 0:
                 row.append(None)
@@ -1493,11 +1558,11 @@ class Connection():
             elif fldtype == NzTypeTimestamp:
                 fldlen = tupdesc.field_size[cur_field]
                 workspace = q_le_unpack(data, offset)[0] if fldlen >= 8 else int.from_bytes(mv[offset:offset+fldlen], 'little', signed=True)
-                timestamp_value = (0, 0, 0, 0, 0, 0, 0)
+                timestamp_value: tuple[int, int, int, int, int, int, int] = (0, 0, 0, 0, 0, 0, 0)
                 if fldlen == 8:
                     result = timestamp2struct(workspace)
                     if result is not False:
-                        timestamp_value = result
+                        timestamp_value = result  # type: ignore[assignment]
                 row.append(Datetime(timestamp_value[0], timestamp_value[1], timestamp_value[2], timestamp_value[3], timestamp_value[4], timestamp_value[5], timestamp_value[6]))
             elif fldtype == NzTypeNumeric:
                 fsize = tupdesc.field_size[cur_field]
@@ -1520,27 +1585,27 @@ class Connection():
 
         cursor._cached_rows.append(row)
 
-    async def Res_read_dbos_tuple(self, cursor, tupdesc):
+    async def Res_read_dbos_tuple(self, cursor: Cursor, tupdesc: DbosTupleDesc) -> None:
         header = await self._read(8)
         length = i_unpack(header, 4)[0]
         data = await self._read(length)
         self._process_dbos_payload(cursor, tupdesc, data)
 
-    def CTable_FieldAt(self, tupdesc, data, cur_field):
+    def CTable_FieldAt(self, tupdesc: DbosTupleDesc, data: bytes, cur_field: int) -> Any:
         if tupdesc.field_fixedSize[cur_field] != 0:
             return self.CTable_i_fixedFieldPtr(data,
                                                tupdesc.field_offset[cur_field])
 
-        return self.CTable_i_varFieldPtr(data, tupdesc.fixedFieldsSize,
+        return self.CTable_i_varFieldPtr(data, tupdesc.fixedFieldsSize,  # type: ignore[arg-type]
                                          tupdesc.field_offset[cur_field])
 
-    def CTable_i_fixedFieldPtr(self, data, offset):
+    def CTable_i_fixedFieldPtr(self, data: bytes, offset: int) -> bytes:
         data = data[offset:]
         return data
 
-    def CTable_i_varFieldPtr(self, data, fixedOffset, varDex):
+    def CTable_i_varFieldPtr(self, data: bytes, fixedOffset: int, varDex: int) -> bytes:
         lenP = data[fixedOffset:]
-        for ctr in range(varDex):
+        for _ in range(varDex):
             length = int.from_bytes(lenP[0:2], 'little')
             if length % 2 == 0:
                 lenP = lenP[length:]
@@ -1550,7 +1615,7 @@ class Connection():
         return lenP
 
     @staticmethod
-    def _oid_type_name(oid):
+    def _oid_type_name(oid: int) -> str:
         names = {
             _OID_BOOL: 'BOOLEAN',
             _OID_BYTEINT: 'BYTEINT',
@@ -1574,20 +1639,20 @@ class Connection():
         return names.get(oid, f'UNKNOWN({oid})')
 
     @staticmethod
-    def _numeric_precision_scale_from_modifier(type_mod):
+    def _numeric_precision_scale_from_modifier(type_mod: int) -> tuple[int, int]:
         if type_mod > TYPE_MOD_OFFSET:
             normalized = type_mod - TYPE_MOD_OFFSET
             return normalized >> 16, normalized & 0xffff
         return 0, 0
 
     @staticmethod
-    def _character_declared_length(oid, type_mod):
+    def _character_declared_length(oid: int, type_mod: int) -> int | None:
         if oid in (_OID_BPCHAR, _OID_VARCHAR, _OID_TEXT, _OID_NCHAR, _OID_NVARCHAR):
             if type_mod > TYPE_MOD_OFFSET:
                 return type_mod - TYPE_MOD_OFFSET
         return None
 
-    def _column_null_ok(self, index, tupdesc):
+    def _column_null_ok(self, index: int, tupdesc: DbosTupleDesc | None) -> bool:
         if tupdesc is None:
             return True
         if tupdesc.nullsAllowed is not None and tupdesc.nullsAllowed <= 0:
@@ -1596,7 +1661,7 @@ class Connection():
             return bool(tupdesc.field_nullAllowed[index])
         return True
 
-    def _resolve_column_metadata(self, col, index, tupdesc):
+    def _resolve_column_metadata(self, col: dict[str, Any], index: int, tupdesc: DbosTupleDesc | None) -> dict[str, Any]:
         oid = col['type_oid']
         type_mod = col.get('type_modifier', -1)
         type_size = col.get('type_size', -1)
@@ -1607,7 +1672,7 @@ class Connection():
 
         column_size = type_size if type_size > 0 else -1
 
-        if tupdesc is not None and index < tupdesc.numFields:
+        if tupdesc is not None and index < tupdesc.numFields:  # type: ignore[operator]
             nz_type = tupdesc.field_type[index]
             if nz_type == _NZ_TYPE_NUMERIC:
                 num_prec = self.CTable_i_fieldPrecision(tupdesc, index)
@@ -1663,9 +1728,9 @@ class Connection():
         }
 
     @staticmethod
-    def _oid_to_python_type(oid):
+    def _oid_to_python_type(oid: int) -> type:
         import decimal as _decimal
-        mapping = {
+        mapping: dict[int, type] = {
             _OID_BOOL: bool,
             _OID_BYTEINT: int,
             _OID_INT2: int,
@@ -1687,23 +1752,23 @@ class Connection():
         }
         return mapping.get(oid, str)
 
-    def CTable_i_fieldType(self, tupdesc, coldex):
+    def CTable_i_fieldType(self, tupdesc: DbosTupleDesc, coldex: int) -> int:
         return (tupdesc.field_type[coldex])
 
-    def CTable_i_fieldSize(self, tupdesc, coldex):
+    def CTable_i_fieldSize(self, tupdesc: DbosTupleDesc, coldex: int) -> int:
         return (tupdesc.field_size[coldex])
 
-    def CTable_i_fieldPrecision(self, tupdesc, coldex):
+    def CTable_i_fieldPrecision(self, tupdesc: DbosTupleDesc, coldex: int) -> int:
         return (((tupdesc.field_size[coldex]) >> 8) & 0x7F)
 
-    def CTable_i_fieldScale(self, tupdesc, coldex):
+    def CTable_i_fieldScale(self, tupdesc: DbosTupleDesc, coldex: int) -> int:
         return ((tupdesc.field_size[coldex]) & 0x00FF)
 
-    def CTable_i_fieldNumericDigit32Count(self, tupdesc, coldex):
+    def CTable_i_fieldNumericDigit32Count(self, tupdesc: DbosTupleDesc, coldex: int) -> int:
         sizeTNumericDigit = 4
         return int(tupdesc.field_trueSize[coldex] / sizeTNumericDigit)
 
-    async def receiveAndWriteDatatoExternal(self, fname, fh):
+    async def receiveAndWriteDatatoExternal(self, fname: str | None, fh: Any) -> None:
         await self._read(4)
 
         try:
@@ -1756,7 +1821,7 @@ class Connection():
 
         return
 
-    async def xferTable(self):
+    async def xferTable(self) -> None:
         await self._read(4)
         clientversion = 1
 
@@ -1791,7 +1856,7 @@ class Connection():
                 source = self._ext_table_source
                 self._ext_table_source = None
 
-                async def _send_chunk(data_chunk):
+                async def _send_chunk(data_chunk: bytes) -> None:
                     data_len = len(data_chunk)
                     if blockSize < data_len:
                         diff = data_len - blockSize
@@ -1873,7 +1938,7 @@ class Connection():
                 pass
             raise
 
-    async def getFileFromBE(self, logDir, filename, logType):
+    async def getFileFromBE(self, logDir: str, filename: str, logType: int) -> bool:
         status = True
 
         fullpath = path.join(logDir, filename)
@@ -1891,7 +1956,7 @@ class Connection():
             fh = await asyncio.to_thread(open, fullpath, "wb+")
 
         try:
-            while (1):
+            while True:
                 numBytes = i_unpack(await self._read(4))[0]
 
                 if numBytes == 0:
@@ -1914,7 +1979,7 @@ class Connection():
 
         return status
 
-    async def _send_message(self, code, data):
+    async def _send_message(self, code: bytes, data: bytes) -> None:
         try:
             await self._write(code)
             await self._write(i_pack(len(data) + 4))
@@ -1928,14 +1993,14 @@ class Connection():
         except AttributeError:
             raise ConnectionClosedError()
 
-    async def send_EXECUTE(self, cursor):
+    async def send_EXECUTE(self, cursor: Cursor) -> None:
         await self._write(EXECUTE_MSG)
         await self._write(FLUSH_MSG)
 
-    def handle_NO_DATA(self, msg, ps):
+    def handle_NO_DATA(self, msg: bytes, ps: Any) -> None:
         pass
 
-    async def handle_COMMAND_COMPLETE(self, data, cursor):
+    async def handle_COMMAND_COMPLETE(self, data: bytes, cursor: Cursor) -> None:
         values = data[:-1].split(b' ')
         command = values[0]
         if command in self._commands_with_count:
@@ -1952,8 +2017,8 @@ class Connection():
                         await self.close_prepared_statement(ps['statement_name_bin'])
                     pcache['ps'].clear()
 
-    async def handle_DATA_ROW(self, data, cursor):
-        numberofcol = len(cursor.ps['row_desc'])
+    async def handle_DATA_ROW(self, data: bytes, cursor: Cursor) -> None:
+        numberofcol = len(cursor.ps['row_desc'])  # type: ignore[index]
         bitmaplen = numberofcol // 8
         if (numberofcol % 8) > 0:
             bitmaplen += 1
@@ -1965,9 +2030,9 @@ class Connection():
         bitmap.reverse()
 
         data_idx = bitmaplen
-        row = []
-        row_desc = cursor.ps['row_desc']
-        for i, func in enumerate(cursor.ps['input_funcs']):
+        row: list[Any] = []
+        row_desc = cursor.ps['row_desc']  # type: ignore[index]
+        for i, func in enumerate(cursor.ps['input_funcs']):  # type: ignore[index]
             if bitmap[i] == 0:
                 row.append(None)
             else:
@@ -1990,7 +2055,7 @@ class Connection():
 
         cursor._cached_rows.append(row)
 
-    async def handle_messages(self, cursor):
+    async def handle_messages(self, cursor: Cursor) -> None:
         code = self.error = None
 
         while code != READY_FOR_QUERY:
@@ -2000,19 +2065,19 @@ class Connection():
         if self.error is not None:
             raise self.error
 
-    async def close_prepared_statement(self, statement_name_bin):
+    async def close_prepared_statement(self, statement_name_bin: bytes) -> None:
         await self._send_message(CLOSE, STATEMENT + statement_name_bin)
         await self._write(SYNC_MSG)
         await self._flush()
         await self.handle_messages(self._cursor)
 
-    async def handle_PARAMETER_STATUS(self, data, ps):
+    async def handle_PARAMETER_STATUS(self, data: bytes, ps: Any) -> None:
         pos = data.find(NULL_BYTE)
         key, value = data[:pos], data[pos + 1:-1]
         self.parameter_statuses.append((key, value))
         if key == b"client_encoding":
             encoding = value.decode("ascii").lower()
-            self._client_encoding = pg_to_py_encodings.get(encoding, encoding)
+            self._client_encoding = pg_to_py_encodings.get(encoding, encoding)  # type: ignore[assignment]
             self._char_varchar_encoding = self._client_encoding
 
         elif key == b"integer_datetimes":
@@ -2051,8 +2116,13 @@ class Connection():
                     b"INSERT", b"DELETE", b"UPDATE", b"MOVE", b"FETCH",
                     b"COPY")
 
-    def array_inspect(self, value):
+    def array_inspect(self, value: list[Any]) -> Any:
         first_element = array_find_first_element(value)
+        oid: int = 25
+        fc: int = FC_BINARY
+        array_oid: int = 0
+        send_func: Any = null_send
+        typ: Any = str
         if first_element is None:
             oid = 25
             fc = FC_BINARY
@@ -2066,13 +2136,13 @@ class Connection():
                 for v in array_flatten(value):
                     if v is None:
                         continue
-                    if min_int2 < v < max_int2:
+                    if min_int2 < v < max_int2:  # type: ignore[operator]
                         continue
                     int2_ok = False
-                    if min_int4 < v < max_int4:
+                    if min_int4 < v < max_int4:  # type: ignore[operator]
                         continue
                     int4_ok = False
-                    if min_int8 < v < max_int8:
+                    if min_int8 < v < max_int8:  # type: ignore[operator]
                         continue
                     int8_ok = False
                 if int2_ok:
@@ -2103,7 +2173,7 @@ class Connection():
                         "type " + str(typ) +
                         " not supported as array contents")
         if fc == FC_BINARY:
-            def send_array_binary(arr):
+            def send_array_binary(arr: list[Any]) -> bytearray:
                 array_check_dimensions(arr)
 
                 has_null = array_has_null(arr)
@@ -2123,7 +2193,7 @@ class Connection():
                             "not all array elements are of type " + str(typ))
                 return data
         else:
-            def send_array_text(arr):
+            def send_array_text(arr: list[Any]) -> bytes:
                 array_check_dimensions(arr)
                 ar = deepcopy(arr)
                 for a, i, v in walk_array(ar):
@@ -2137,3 +2207,20 @@ class Connection():
                 return str(ar).translate(arr_trans).encode('ascii')
 
         return (array_oid, fc, send_array_binary if fc == FC_BINARY else send_array_text)
+
+
+__all__ = [
+    "Connection",
+    "Warning", "Error", "InterfaceError", "ConnectionClosedError",
+    "DatabaseError", "DataError", "OperationalError", "IntegrityError",
+    "InternalError", "ProgrammingError", "NotSupportedError",
+    "ArrayContentNotSupportedError", "ArrayContentNotHomogenousError",
+    "ArrayDimensionsNotConsistentError",
+    "BINARY", "Binary", "Date", "Time", "Timestamp",
+    "DateFromTicks", "TimeFromTicks", "TimestampFromTicks",
+    "Interval", "LogOptions",
+    "PGType", "PGEnum", "PGJson", "PGJsonb", "PGText", "PGTsvector",
+    "PGVarchar",
+    "Cursor",
+    "load_data",
+]

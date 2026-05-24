@@ -156,7 +156,7 @@ async def test_row_count(db_table):
     async with db_table.cursor() as c1:
         await c1.execute("SELECT count(*) FROM nzpy_test_t1")
 
-        assert [5] == (await c1.fetchall())[0]
+        assert (await c1.fetchall())[0] == [5]
 
         await c1.execute("UPDATE nzpy_test_t1 SET f3 = ? WHERE f2 > 101", ("Hello!",))
         assert 2 == c1.rowcount

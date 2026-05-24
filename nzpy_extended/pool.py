@@ -1,17 +1,20 @@
+from __future__ import annotations
+
 import asyncio
 import logging
 import threading
 import time
 from collections import deque
+from collections.abc import AsyncGenerator, Callable, Generator
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Any
 
 from nzpy_extended.core import Connection
 
 from . import sync as _sync
 
-_CONNECT_DEFAULTS = {
+_CONNECT_DEFAULTS: dict[str, Any] = {
     'unix_sock': None,
     'ssl': None,
     'securityLevel': 0,
@@ -50,10 +53,10 @@ class NzPool:
         max_lifetime: float = 3600.0,
         max_uses: int = 1000,
         acquire_timeout: float = 30.0,
-        ping_query: Optional[str] = "SELECT 1",
-        on_connect: Optional[Callable] = None,
+        ping_query: str | None = "SELECT 1",
+        on_connect: Callable[[Connection], Any] | None = None,
         **kwargs: Any,
-    ):
+    ) -> None:
         self.min_size = min_size
         self.max_size = max_size
         if self.min_size > self.max_size:
@@ -74,15 +77,15 @@ class NzPool:
         self._closed = False
         self._checked_out: set[int] = set()
         self._log = logging.getLogger("nzpy_extended.NzPool")
-        self._maintain_task: Optional[asyncio.Task] = None
+        self._maintain_task: asyncio.Task[None] | None = None
 
-    async     def _create_new_connection(self) -> Connection:
+    async def _create_new_connection(self) -> Connection:
         conn = Connection()
         merged = dict(_CONNECT_DEFAULTS)
         merged.update(self.kwargs)
         await conn._connect(**merged)
-        conn._nzpy_pool_created = time.monotonic()
-        conn._nzpy_pool_uses = 0
+        conn._nzpy_pool_created = time.monotonic()  # type: ignore[attr-defined]
+        conn._nzpy_pool_uses = 0  # type: ignore[attr-defined]
         if self.on_connect is not None:
             try:
                 result = self.on_connect(conn)
@@ -133,7 +136,7 @@ class NzPool:
                 self._log.warning("Failed to pre-create connection: %s", e)
                 break
 
-    def get_stats(self) -> dict:
+    def get_stats(self) -> dict[str, Any]:
         return {
             "type":           "NzPool",
             "pool_min":       self.min_size,
@@ -144,19 +147,19 @@ class NzPool:
             "pool_closed":    self._closed,
         }
 
-    async def open(self):
+    async def open(self) -> None:
         await self._fill_idle()
         if self._maintain_task is None and not self._closed:
             self._maintain_task = asyncio.create_task(self._background_maintain())
 
-    async def _background_maintain(self):
+    async def _background_maintain(self) -> None:
         while not self._closed:
             await asyncio.sleep(30)
 
             async with self._cond:
                 candidates = list(self._pool)
 
-            stale = []
+            stale: list[_PooledConnection] = []
             for pc in candidates:
                 if not await self._validate_connection(pc):
                     stale.append(pc)
@@ -187,9 +190,9 @@ class NzPool:
                 elif self._created < self.max_size:
                     try:
                         conn = await self._create_new_connection()
-                        now = time.monotonic()
+                        _ = time.monotonic()
                         self._created += 1
-                        conn._nzpy_pool_uses = 1
+                        conn._nzpy_pool_uses = 1  # type: ignore[attr-defined]
                         self._checked_out.add(id(conn))
                         return conn
                     except Exception:
@@ -214,7 +217,7 @@ class NzPool:
             if await self._validate_connection(pc):
                 async with self._cond:
                     pc.use_count += 1
-                    pc.conn._nzpy_pool_uses = pc.use_count
+                    pc.conn._nzpy_pool_uses = pc.use_count  # type: ignore[attr-defined]
                     self._checked_out.add(id(pc.conn))
                 return pc.conn
             else:
@@ -243,7 +246,7 @@ class NzPool:
             self._cond.notify(1)
 
     @asynccontextmanager
-    async def connection(self):
+    async def connection(self) -> AsyncGenerator[Connection, None]:
         conn = await self.acquire()
         try:
             yield conn
@@ -263,31 +266,14 @@ class NzPool:
             self._checked_out.clear()
             self._cond.notify_all()
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> NzPool:
         return self
 
-    async def __aexit__(self, *args):
+    async def __aexit__(self, *args: Any) -> None:
         await self.close_all()
 
 
 class SyncPool:
-    """Synchronous connection pool for scripts, ETL, Django, FastAPI sync endpoints.
-
-    Thread-safe — uses threading.Lock instead of asyncio.Condition.
-
-    Example:
-        pool = SyncPool(min_size=2, max_size=10,
-                        host="nz-host", port=5480,
-                        database="mydb", user="admin", password="secret")
-
-        with pool.connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT * FROM t")
-                rows = cur.fetchall()
-
-        pool.close_all()
-    """
-
     def __init__(
         self,
         min_size: int = 1,
@@ -296,10 +282,10 @@ class SyncPool:
         max_lifetime: float = 3600.0,
         max_uses: int = 1000,
         acquire_timeout: float = 30.0,
-        ping_query: Optional[str] = "SELECT 1",
-        on_connect: Optional[Callable] = None,
-        **conn_kwargs,
-    ):
+        ping_query: str | None = "SELECT 1",
+        on_connect: Callable[[Any], Any] | None = None,
+        **conn_kwargs: Any,
+    ) -> None:
         if min_size > max_size:
             raise ValueError(
                 f"min_size ({min_size}) cannot exceed max_size ({max_size})"
@@ -318,7 +304,7 @@ class SyncPool:
         self._lock = threading.Lock()
         self._sem = threading.Semaphore(max_size)
         self._created = 0
-        self._checked_out: set = set()
+        self._checked_out: set[int] = set()
         self._checked_out_pc: dict[int, _SyncPooledConnection] = {}
         self._closed = False
         self._maintain_active = True
@@ -336,8 +322,7 @@ class SyncPool:
             except Exception:
                 break
 
-    def open(self):
-        """Ensure min_size connections are ready (useful after pre-fill failures)."""
+    def open(self) -> None:
         with self._lock:
             while self._created < self.min_size and not self._closed:
                 try:
@@ -365,12 +350,12 @@ class SyncPool:
                 return False
         return True
 
-    def _maintain_loop(self):
+    def _maintain_loop(self) -> None:
         while self._maintain_active:
             time.sleep(30)
             if not self._maintain_active or self._closed:
                 break
-            stale = []
+            stale: list[_SyncPooledConnection] = []
             with self._lock:
                 if self._closed:
                     break
@@ -389,7 +374,7 @@ class SyncPool:
                 except Exception:
                     pass
 
-    def acquire(self):
+    def acquire(self) -> Any:
         if self._closed:
             raise RuntimeError("Pool is closed")
         acquired = self._sem.acquire(timeout=self.acquire_timeout)
@@ -425,7 +410,7 @@ class SyncPool:
             self._checked_out_pc[conn_id] = _SyncPooledConnection(conn, now, now, 1)
             return conn
 
-    def release(self, conn):
+    def release(self, conn: Any) -> None:
         with self._lock:
             conn_id = id(conn)
             if conn_id not in self._checked_out:
@@ -448,14 +433,14 @@ class SyncPool:
         self._sem.release()
 
     @contextmanager
-    def connection(self):
+    def connection(self) -> Generator[Any, None, None]:
         conn = self.acquire()
         try:
             yield conn
         finally:
             self.release(conn)
 
-    def get_stats(self) -> dict:
+    def get_stats(self) -> dict[str, Any]:
         with self._lock:
             return {
                 "type":           "SyncPool",
@@ -467,7 +452,7 @@ class SyncPool:
                 "pool_closed":    self._closed,
             }
 
-    def close_all(self):
+    def close_all(self) -> None:
         self._maintain_active = False
         with self._lock:
             self._closed = True
@@ -486,62 +471,54 @@ class SyncPool:
                 except ValueError:
                     pass
 
-    def __enter__(self):
+    def __enter__(self) -> SyncPool:
         return self
 
-    def __exit__(self, *args):
+    def __exit__(self, *args: Any) -> None:
         self.close_all()
 
 
 class NullPool:
-    """Sync pool with no caching — new connection per acquire().
-
-    Ideal for tests and one-off scripts.
-    Guarantees isolation — every connection is fresh.
-    """
-
-    def __init__(self, on_connect: Optional[Callable] = None, **conn_kwargs):
+    def __init__(self, on_connect: Callable[[Any], Any] | None = None, **conn_kwargs: Any) -> None:
         self._kwargs = conn_kwargs
         self._on_connect = on_connect
 
-    def acquire(self):
+    def acquire(self) -> Any:
         return _sync.connect(on_connect=self._on_connect, **self._kwargs)
 
-    def release(self, conn):
+    def release(self, conn: Any) -> None:
         try:
             conn.close()
         except Exception:
             pass
 
     @contextmanager
-    def connection(self):
+    def connection(self) -> Generator[Any, None, None]:
         conn = self.acquire()
         try:
             yield conn
         finally:
             self.release(conn)
 
-    def get_stats(self) -> dict:
+    def get_stats(self) -> dict[str, str]:
         return {"type": "NullPool"}
 
-    def close_all(self):
+    def close_all(self) -> None:
         pass
 
-    def __enter__(self):
+    def __enter__(self) -> NullPool:
         return self
 
-    def __exit__(self, *args):
+    def __exit__(self, *args: Any) -> None:
         pass
 
 
 class AsyncNullPool:
-    """Async pool with no caching — new connection per acquire()."""
-
-    def __init__(self, on_connect: Optional[Callable] = None, **conn_kwargs):
+    def __init__(self, on_connect: Callable[[Connection], Any] | None = None, **conn_kwargs: Any) -> None:
         self._kwargs = conn_kwargs
         self._on_connect = on_connect
 
-    async def acquire(self):
+    async def acquire(self) -> Connection:
         conn = Connection()
         merged = dict(_CONNECT_DEFAULTS)
         merged.update(self._kwargs)
@@ -552,28 +529,31 @@ class AsyncNullPool:
                 await result
         return conn
 
-    async def release(self, conn):
+    async def release(self, conn: Connection) -> None:
         try:
             await conn.close()
         except Exception:
             pass
 
     @asynccontextmanager
-    async def connection(self):
+    async def connection(self) -> AsyncGenerator[Connection, None]:
         conn = await self.acquire()
         try:
             yield conn
         finally:
             await self.release(conn)
 
-    def get_stats(self) -> dict:
+    def get_stats(self) -> dict[str, str]:
         return {"type": "AsyncNullPool"}
 
-    async def close_all(self):
+    async def close_all(self) -> None:
         pass
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> AsyncNullPool:
         return self
 
-    async def __aexit__(self, *args):
+    async def __aexit__(self, *args: Any) -> None:
         pass
+
+
+__all__ = ["NzPool", "SyncPool", "NullPool", "AsyncNullPool"]

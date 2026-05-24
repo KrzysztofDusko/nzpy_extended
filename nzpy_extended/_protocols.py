@@ -1,0 +1,66 @@
+from __future__ import annotations
+
+from collections.abc import AsyncGenerator, AsyncIterator
+from typing import Any, Protocol, runtime_checkable
+
+
+@runtime_checkable
+class ConnectionProtocol(Protocol):
+    """DB-API 2.0 async connection protocol."""
+
+    in_transaction: bool
+    autocommit: bool
+    error: Any | None
+
+    async def __aenter__(self) -> ConnectionProtocol: ...
+
+    async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> None: ...
+
+    def cursor(self) -> CursorProtocol: ...
+
+    async def commit(self) -> None: ...
+
+    async def rollback(self) -> None: ...
+
+    async def close(self) -> None: ...
+
+    async def cancel(self, exec_gen: int | None = None) -> None: ...
+
+
+@runtime_checkable
+class CursorProtocol(Protocol):
+    """DB-API 2.0 async cursor protocol."""
+
+    arraysize: int
+    description: Any
+    rowcount: int
+    _has_rows: bool
+
+    async def __aenter__(self) -> CursorProtocol: ...
+
+    async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> None: ...
+
+    async def execute(self, operation: str, args: Any = None, **kwargs: Any) -> CursorProtocol: ...
+
+    async def executemany(self, operation: str, param_sets: list[Any]) -> CursorProtocol: ...
+
+    async def fetchone(self) -> Any: ...
+
+    async def fetchmany(self, num: int | None = None) -> list[Any]: ...
+
+    async def fetchall(self) -> list[Any]: ...
+
+    async def nextset(self) -> bool | None: ...
+
+    async def close(self) -> None: ...
+
+    def setinputsizes(self, sizes: Any) -> None: ...
+
+    def setoutputsize(self, size: Any, column: Any = None) -> None: ...
+
+    def __aiter__(self) -> AsyncIterator[Any]: ...
+
+    async def __anext__(self) -> Any: ...
+
+
+__all__ = ["ConnectionProtocol", "CursorProtocol"]

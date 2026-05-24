@@ -85,6 +85,21 @@ with conn.cursor() as cur:
     cur.execute("SELECT id, name FROM users WHERE active = ?", (1,))
     for row in cur:
         print(row)
+
+# Cancel a running query. The connection remains usable afterwards.
+conn.cancel()
+
+# Interrupt alias (same as cancel)
+cur.interrupt()
+
+# Explicit transaction control
+with conn.transaction():
+    cur.execute("INSERT INTO users (name) VALUES ('Alice')")
+    # auto-commits on success, auto-rollbacks on exception
+
+# Rows are returned as lists (DB-API compliant sequences)
+row = cur.fetchone()  # [1, 'Alice']
+rows = cur.fetchall()  # [[2, 'Bob'], [3, 'Charlie']]
 ```
 
 ### Async — FastAPI, asyncio

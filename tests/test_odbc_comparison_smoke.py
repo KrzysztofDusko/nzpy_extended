@@ -135,11 +135,13 @@ def _to_number(s):
 
 def _odbc_conn():
     if not _HAVE_PYODBC:
-        pytest.skip("pyodbc not installed")
+        from odbc_helper import connect as _oc
+        return _oc(dsn="NetezzaSQL", user=NZ_USER, password=NZ_PASSWORD)
     try:
         return pyodbc.connect(ODBC_CONN_STR, timeout=15)
-    except Exception as e:
-        pytest.skip(f"ODBC driver unavailable: {e}")
+    except Exception:
+        from odbc_helper import connect as _oc
+        return _oc(dsn="NetezzaSQL", user=NZ_USER, password=NZ_PASSWORD)
 
 
 async def _nzpy_conn():

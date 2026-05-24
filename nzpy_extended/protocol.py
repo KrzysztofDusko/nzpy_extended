@@ -2,7 +2,6 @@ from struct import Struct
 
 from .utils import i_pack
 
-# Message codes
 NOTICE_RESPONSE = b"N"
 AUTHENTICATION_REQUEST = b"R"
 PARAMETER_STATUS = b"S"
@@ -36,7 +35,7 @@ TERMINATE = b'X'
 CLOSE = b'C'
 
 
-def create_message(code, data=b''):
+def create_message(code: bytes, data: bytes = b'') -> bytes:
     return code + i_pack(len(data) + 4) + data
 
 
@@ -46,11 +45,9 @@ TERMINATE_MSG = create_message(TERMINATE)
 COPY_DONE_MSG = create_message(COPY_DONE)
 EXECUTE_MSG = create_message(EXECUTE, b'\x00' + i_pack(0))
 
-# DESCRIBE constants
 STATEMENT = b'S'
 PORTAL = b'P'
 
-# ErrorResponse codes
 RESPONSE_SEVERITY = "V"
 RESPONSE_CODE = "C"
 RESPONSE_MSG = "M"
@@ -73,7 +70,6 @@ TYPE_MOD_OFFSET = 16
 NULL = i_pack(-1)
 NULL_BYTE = b'\x00'
 
-# External table stuff
 EXTAB_SOCK_DATA = 1
 EXTAB_SOCK_ERROR = 2
 EXTAB_SOCK_DONE = 3
@@ -81,14 +77,12 @@ EXTAB_SOCK_FLUSH = 4
 
 EXTERNAL_TABLE_STREAM_MARKER = '__nzpy_stream__'
 
-# Connection status
 CONN_NOT_CONNECTED = 0
 CONN_CONNECTED = 1
 CONN_EXECUTING = 2
 CONN_FETCHING = 3
 CONN_CANCELLED = 4
 
-# NZ datatype
 NzTypeRecAddr = 1
 NzTypeDouble = 2
 NzTypeInt = 3
@@ -123,7 +117,7 @@ NzTypeLastEntry = 34
 
 nzpy_extended_client_version = "Release 11.3.1.3"
 
-dataType = {
+dataType: dict[int, str] = {
     NzTypeChar: "NzTypeChar",
     NzTypeVarChar: "NzTypeVarChar",
     NzTypeVarFixedChar: "NzTypeVarFixedChar",

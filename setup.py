@@ -19,4 +19,6 @@ if not os.environ.get("NZPY_EXTENDED_NO_CEXT", "").lower() in ("1", "true", "yes
 setup(
     version=get_versions()["version"],
     ext_modules=ext_modules,
+    include_package_data=True,
+    package_data={"nzpy_extended": ["py.typed"]},
 )

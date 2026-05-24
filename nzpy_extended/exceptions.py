@@ -11,7 +11,7 @@ class InterfaceError(Error):
 
 
 class ConnectionClosedError(InterfaceError):
-    def __init__(self, msg=None):
+    def __init__(self, msg: str | None = None) -> None:
         super().__init__(msg if msg is not None else "connection is closed")
 
 
@@ -53,3 +53,12 @@ class ArrayContentNotHomogenousError(ProgrammingError):
 
 class ArrayDimensionsNotConsistentError(ProgrammingError):
     pass
+
+
+__all__ = [
+    "Warning", "Error", "InterfaceError", "ConnectionClosedError",
+    "DatabaseError", "DataError", "OperationalError", "IntegrityError",
+    "InternalError", "ProgrammingError", "NotSupportedError",
+    "ArrayContentNotSupportedError", "ArrayContentNotHomogenousError",
+    "ArrayDimensionsNotConsistentError",
+]

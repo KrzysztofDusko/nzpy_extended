@@ -55,11 +55,19 @@ async def _conn():
 
 
 def _odbc_conn():
+    """Return an ODBC connection using pyodbc (Windows) or ctypes helper (Linux)."""
+    if not HAVE_PYODBC:
+        from odbc_helper import connect as _oc
+        return _oc(dsn="NetezzaSQL", user=NZ_USER, password=NZ_PASSWORD)
     conn_str = (
         f"DRIVER={{NetezzaSQL}};SERVER={NZ_HOST};PORT={NZ_PORT};"
         f"DATABASE={NZ_DB};UID={NZ_USER};PWD={NZ_PASSWORD};"
     )
-    return pyodbc.connect(conn_str)
+    try:
+        return pyodbc.connect(conn_str)
+    except Exception:
+        from odbc_helper import connect as _oc
+        return _oc(dsn="NetezzaSQL", user=NZ_USER, password=NZ_PASSWORD)
 
 
 def _odbc_safe_fetchall(cursor):
@@ -115,7 +123,6 @@ _V_VIEWS = [
 ]
 
 
-@pytest.mark.skipif(not HAVE_PYODBC, reason="pyodbc not installed")
 @pytest.mark.parametrize("sql", _V_VIEWS)
 @pytest.mark.asyncio
 @pytest.mark.timeout(60)

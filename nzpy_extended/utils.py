@@ -1,9 +1,11 @@
 import datetime
 import enum
 import re
+from collections.abc import Callable, Generator, Iterator, Awaitable
 from decimal import Decimal
 from json import dumps
 from struct import Struct
+from typing import Any
 from uuid import UUID
 
 from .exceptions import (InterfaceError, ProgrammingError,
@@ -12,10 +14,39 @@ from .exceptions import (InterfaceError, ProgrammingError,
                          ArrayDimensionsNotConsistentError)
 
 
-def pack_funcs(fmt):
+def pack_funcs(fmt: str) -> tuple[Callable[..., bytes], Callable[..., tuple[Any, ...]]]:
     struc = Struct('!' + fmt)
     return struc.pack, struc.unpack_from
 
+
+i_pack: Callable[..., bytes]
+i_unpack: Callable[..., tuple[Any, ...]]
+h_pack: Callable[..., bytes]
+h_unpack: Callable[..., tuple[Any, ...]]
+q_pack: Callable[..., bytes]
+q_unpack: Callable[..., tuple[Any, ...]]
+d_pack: Callable[..., bytes]
+d_unpack: Callable[..., tuple[Any, ...]]
+f_pack: Callable[..., bytes]
+f_unpack: Callable[..., tuple[Any, ...]]
+iii_pack: Callable[..., bytes]
+iii_unpack: Callable[..., tuple[Any, ...]]
+ii_pack: Callable[..., bytes]
+ii_unpack: Callable[..., tuple[Any, ...]]
+qii_pack: Callable[..., bytes]
+qii_unpack: Callable[..., tuple[Any, ...]]
+dii_pack: Callable[..., bytes]
+dii_unpack: Callable[..., tuple[Any, ...]]
+ihic_pack: Callable[..., bytes]
+ihic_unpack: Callable[..., tuple[Any, ...]]
+ci_pack: Callable[..., bytes]
+ci_unpack: Callable[..., tuple[Any, ...]]
+c_pack: Callable[..., bytes]
+c_unpack: Callable[..., tuple[Any, ...]]
+bh_pack: Callable[..., bytes]
+bh_unpack: Callable[..., tuple[Any, ...]]
+cccc_pack: Callable[..., bytes]
+cccc_unpack: Callable[..., tuple[Any, ...]]
 
 i_pack, i_unpack = pack_funcs('i')
 h_pack, h_unpack = pack_funcs('h')
@@ -31,35 +62,38 @@ ci_pack, ci_unpack = pack_funcs('ci')
 c_pack, c_unpack = pack_funcs('c')
 bh_pack, bh_unpack = pack_funcs('bh')
 cccc_pack, cccc_unpack = pack_funcs('cccc')
-h_le_unpack = Struct('<H').unpack_from
-i_le_unpack = Struct('<i').unpack_from
-q_le_unpack = Struct('<q').unpack_from
+h_le_unpack: Callable[..., tuple[Any, ...]] = Struct('<H').unpack_from
+i_le_unpack: Callable[..., tuple[Any, ...]] = Struct('<i').unpack_from
+q_le_unpack: Callable[..., tuple[Any, ...]] = Struct('<q').unpack_from
 
-min_int2, max_int2 = -2 ** 15, 2 ** 15
-min_int4, max_int4 = -2 ** 31, 2 ** 31
-min_int8, max_int8 = -2 ** 63, 2 ** 63
+min_int2: int = -2 ** 15
+max_int2: int = 2 ** 15 - 1
+min_int4: int = -2 ** 31
+max_int4: int = 2 ** 31 - 1
+min_int8: int = -2 ** 63
+max_int8: int = 2 ** 63 - 1
 
 
-def _quote_text_literal(value):
+def _quote_text_literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
-def convert_paramstyle(style, query):
+def convert_paramstyle(style: str, query: str) -> tuple[str, Callable[[object], tuple[Any, ...]]]:
     OUTSIDE = 0
     INSIDE_SQ = 1
     INSIDE_QI = 2
     INSIDE_ES = 3
     INSIDE_CO = 4
 
-    output_query = []
+    output_query: list[str] = []
     state = OUTSIDE
-    prev_c = None
+    prev_c: str | None = None
     i = 0
     positional_count = 0
-    ordered_names = []
-    name_to_index = {}
+    ordered_names: list[str] = []
+    name_to_index: dict[str, int] = {}
 
-    def remember_name(name):
+    def remember_name(name: str) -> int:
         if name not in name_to_index:
             name_to_index[name] = len(ordered_names) + 1
             ordered_names.append(name)
@@ -166,16 +200,16 @@ def convert_paramstyle(style, query):
         prev_c = c
         i += 1
 
-    def make_args(vals):
+    def make_args(vals: object) -> tuple[Any, ...]:
         if vals is None:
             return ()
         if style in ("named", "pyformat") and ordered_names:
+            if not isinstance(vals, dict):
+                raise ProgrammingError("Named parameters require a mapping.")
             try:
                 return tuple(vals[name] for name in ordered_names)
             except KeyError as exc:
                 raise ProgrammingError(f"Missing value for parameter '{exc.args[0]}'") from exc
-            except TypeError as exc:
-                raise ProgrammingError("Named parameters require a mapping.") from exc
         if isinstance(vals, tuple):
             return vals
         if isinstance(vals, list):
@@ -183,14 +217,14 @@ def convert_paramstyle(style, query):
         if isinstance(vals, dict):
             raise ProgrammingError("Positional parameters require a sequence, not a mapping.")
         try:
-            return tuple(vals)
+            return tuple(vals)  # type: ignore[arg-type]
         except TypeError:
             return (vals,)
 
     return ''.join(output_query), make_args
 
 
-def _sql_literal(value):
+def _sql_literal(value: object) -> str:
     if value is None:
         return "NULL"
     if isinstance(value, bool):
@@ -218,16 +252,16 @@ def _sql_literal(value):
     return _quote_text_literal(str(value))
 
 
-def _render_prepared_statement(statement, args):
+def _render_prepared_statement(statement: str, args: tuple[Any, ...]) -> tuple[str, int]:
     OUTSIDE = 0
     INSIDE_SQ = 1
     INSIDE_QI = 2
     INSIDE_ES = 3
     INSIDE_CO = 4
 
-    output_query = []
+    output_query: list[str] = []
     state = OUTSIDE
-    prev_c = None
+    prev_c: str | None = None
     i = 0
     max_index = 0
 
@@ -301,32 +335,30 @@ def _render_prepared_statement(statement, args):
     return ''.join(output_query), max_index
 
 
-def walk_array(arr):
+def walk_array(arr: list[Any]) -> Generator[tuple[list[Any], int, object], None, None]:
     for i, v in enumerate(arr):
         if isinstance(v, list):
-            for a, i2, v2 in walk_array(v):
-                yield a, i2, v2
+            yield from walk_array(v)
         else:
             yield arr, i, v
 
 
-def array_find_first_element(arr):
+def array_find_first_element(arr: list[Any]) -> object | None:
     for v in array_flatten(arr):
         if v is not None:
             return v
     return None
 
 
-def array_flatten(arr):
+def array_flatten(arr: list[Any]) -> Generator[object, None, None]:
     for v in arr:
         if isinstance(v, list):
-            for v2 in array_flatten(v):
-                yield v2
+            yield from array_flatten(v)
         else:
             yield v
 
 
-def array_check_dimensions(arr):
+def array_check_dimensions(arr: list[Any]) -> list[Any]:
     if len(arr) > 0:
         v0 = arr[0]
         if isinstance(v0, list):
@@ -348,14 +380,14 @@ def array_check_dimensions(arr):
     return []
 
 
-def array_has_null(arr):
+def array_has_null(arr: list[Any]) -> bool:
     for v in array_flatten(arr):
         if v is None:
             return True
     return False
 
 
-def array_dim_lengths(arr):
+def array_dim_lengths(arr: list[Any]) -> list[Any]:
     len_arr = len(arr)
     retval = [len_arr]
     if len_arr > 0:
@@ -365,7 +397,7 @@ def array_dim_lengths(arr):
     return retval
 
 
-pg_array_types = {
+pg_array_types: dict[int, int] = {
     16: 1000,
     25: 1009,
     701: 1022,
@@ -373,7 +405,7 @@ pg_array_types = {
     1700: 1231,
 }
 
-pg_to_py_encodings = {
+pg_to_py_encodings: dict[str, str | None] = {
     "mule_internal": None,
     "euc_tw": None,
     "euc_cn": "gb2312",
@@ -415,7 +447,7 @@ _FLOAT_RE = re.compile(r'^-?\d+\.?\d*(?:[eE][+-]?\d+)?$')
 _BOOL_RE = re.compile(r'^(true|false|t|f|0|1|yes|no)$', re.IGNORECASE)
 
 
-def _infer_nz_type(val):
+def _infer_nz_type(val: object) -> str:
     if val is None:
         return 'VARCHAR(255)'
     if isinstance(val, bool):
@@ -429,9 +461,9 @@ def _infer_nz_type(val):
     if isinstance(val, float):
         return 'FLOAT'
     if isinstance(val, Decimal):
-        sign, digits, exponent = val.as_tuple()
+        _sign, digits, exponent = val.as_tuple()
         precision = len(digits)
-        scale = max(0, -exponent)
+        scale = max(0, -exponent)  # type: ignore[operator]
         precision = min(max(precision, 1), 38)
         return f'NUMERIC({precision},{scale})'
     if isinstance(val, datetime.datetime):
@@ -451,7 +483,7 @@ def _infer_nz_type(val):
     return 'CLOB'
 
 
-def _infer_type_from_strings(str_vals):
+def _infer_type_from_strings(str_vals: list[str]) -> str:
     non_empty = [s for s in str_vals if s and s.strip()]
     if not non_empty:
         return 'VARCHAR(255)'
@@ -459,14 +491,11 @@ def _infer_type_from_strings(str_vals):
     stripped = [s.strip() for s in non_empty]
     lowers = [s.lower() for s in stripped]
 
-    # Boolean detection — only if at least one explicit bool keyword present
-    # (0/1 alone are treated as integers, not booleans)
     bool_keywords = {'true', 'false', 't', 'f', 'yes', 'no'}
     has_bool_keyword = any(s in bool_keywords for s in lowers)
     if has_bool_keyword and all(s in {'true', 'false', 't', 'f', '0', '1', 'yes', 'no'} for s in lowers):
         return 'BOOLEAN'
 
-    # Integer detection — reject values with leading zeros (data preservation)
     if all(_INT_RE.match(s) for s in stripped):
         has_leading_zero = any(
             len(s.lstrip('-+')) > 1 and s.lstrip('-+')[0] == '0'
@@ -481,7 +510,6 @@ def _infer_type_from_strings(str_vals):
                 return 'INT'
             return 'BIGINT'
 
-    # Date detection
     if all(_DATE_RE.match(s) for s in stripped):
         try:
             for s in stripped:
@@ -490,11 +518,9 @@ def _infer_type_from_strings(str_vals):
         except ValueError:
             pass
 
-    # Time detection
     if all(_TIME_RE.match(s) for s in stripped):
         return 'TIME'
 
-    # Timestamp detection
     if all(_TIMESTAMP_RE.match(s) for s in stripped):
         try:
             for s in stripped:
@@ -503,7 +529,6 @@ def _infer_type_from_strings(str_vals):
         except ValueError:
             pass
 
-    # Numeric (Decimal) detection — values with explicit decimal point(s)
     has_dot = any('.' in s for s in stripped)
     if has_dot and all(_FLOAT_RE.match(s) for s in stripped):
         max_int_digits = 0
@@ -538,11 +563,11 @@ def _infer_type_from_strings(str_vals):
     return 'CLOB'
 
 
-def _infer_columns_from_rows(rows):
+def _infer_columns_from_rows(rows: list[Any]) -> list[tuple[str, str]]:
     if not rows:
         return []
     ncols = len(rows[0])
-    columns = []
+    columns: list[tuple[str, str]] = []
     for i in range(ncols):
         col_vals = [row[i] for row in rows]
         non_null = [v for v in col_vals if v is not None]
@@ -567,11 +592,11 @@ def _infer_columns_from_rows(rows):
     return columns
 
 
-def _rows_to_csv_bytes(rows, delimiter='|', encoding='latin-1', escape_char='\\',
-                       columns=None):
-    parts = []
+def _rows_to_csv_bytes(rows: list[Any], delimiter: str = '|', encoding: str = 'latin-1', escape_char: str | None = '\\',
+                       columns: list[tuple[str, str]] | None = None) -> bytes:
+    parts: list[str] = []
     for row in rows:
-        fields = []
+        fields: list[str] = []
         for i, val in enumerate(row):
             if val is None:
                 fields.append('')
@@ -587,3 +612,26 @@ def _rows_to_csv_bytes(rows, delimiter='|', encoding='latin-1', escape_char='\\'
                 fields.append(s)
         parts.append(delimiter.join(fields))
     return ('\n'.join(parts) + '\n').encode(encoding)
+
+
+__all__ = [
+    "pack_funcs", "i_pack", "i_unpack", "h_pack", "h_unpack",
+    "q_pack", "q_unpack", "d_pack", "d_unpack",
+    "f_pack", "f_unpack",
+    "iii_pack", "iii_unpack", "ii_pack", "ii_unpack",
+    "qii_pack", "qii_unpack", "dii_pack", "dii_unpack",
+    "ihic_pack", "ihic_unpack", "ci_pack", "ci_unpack",
+    "c_pack", "c_unpack", "bh_pack", "bh_unpack",
+    "cccc_pack", "cccc_unpack",
+    "h_le_unpack", "i_le_unpack", "q_le_unpack",
+    "min_int2", "max_int2", "min_int4", "max_int4",
+    "min_int8", "max_int8",
+    "convert_paramstyle", "_sql_literal",
+    "_render_prepared_statement",
+    "walk_array", "array_find_first_element", "array_flatten",
+    "array_check_dimensions", "array_has_null",
+    "array_dim_lengths",
+    "pg_array_types", "pg_to_py_encodings",
+    "_infer_nz_type", "_infer_columns_from_rows",
+    "_rows_to_csv_bytes",
+]
