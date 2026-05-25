@@ -18,11 +18,11 @@ class Cursor:
         self._c: Connection | None = connection
         self.arraysize = 1
         self.ps: dict[str, Any] | None = None
-        self._row_count = -1
-        self._cached_rows: deque[Any] = deque()
+        self.row_count = -1
+        self.cached_rows: deque[Any] = deque()
         self.notices: deque[Any] = deque()
-        self._generator: Any = None
-        self._has_rows = False
+        self.generator: Any = None
+        self.has_rows = False
         self.stream: Any = None
         self._timeout: float | None = None
         self._exec_gen: int | None = None
@@ -40,13 +40,9 @@ class Cursor:
 
     @property
     def rowcount(self) -> int:
-        return self._row_count
+        return self.row_count
 
     description = property(lambda self: self._getDescription())
-
-    @property
-    def has_rows(self) -> bool:
-        return self._has_rows
 
     def _getDescription(self) -> tuple[Any, ...] | None:
         if self.ps is None:
@@ -57,7 +53,7 @@ class Cursor:
         tupdesc = self.ps.get('tupdesc')
         columns: list[tuple[Any, ...]] = []
         for i, col in enumerate(row_desc):
-            meta = self._c._resolve_column_metadata(col, i, tupdesc) if self._c else None
+            meta =         self._c._meta.resolve_column_metadata(col, i, tupdesc) if self._c else None
             if meta is None:
                 columns.append((col["name"].decode(), col["type_oid"],
                                 None, None, None, None, None))
@@ -82,7 +78,7 @@ class Cursor:
         tupdesc = self.ps.get('tupdesc')
         rows: list[dict[str, Any]] = []
         for i, col in enumerate(row_desc):
-            meta = self._c._resolve_column_metadata(col, i, tupdesc) if self._c else None
+            meta = self._c._meta.resolve_column_metadata(col, i, tupdesc) if self._c else None
             if meta is None:
                 continue
             rows.append({
@@ -107,7 +103,7 @@ class Cursor:
         tupdesc = self.ps.get('tupdesc')
         if self._c is None:
             raise ProgrammingError("Cursor closed")
-        return self._c._resolve_column_metadata(col, index, tupdesc)
+        return         self._c._meta.resolve_column_metadata(col, index, tupdesc)
 
     async def execute(self, operation: str, args: Any | None = None, stream: Any = None, timeout: float | None = None) -> Cursor:
         try:
@@ -120,7 +116,7 @@ class Cursor:
                 self._c.in_transaction = True
 
             if self._c is not None:
-                exec_gen = self._c._command_generation + 1
+                exec_gen = self._c.command_generation + 1
                 self._exec_gen = exec_gen
                 coro = self._c.execute(self, operation, args)
                 if timeout is not None and timeout > 0:
@@ -135,7 +131,7 @@ class Cursor:
         except AttributeError as e:
             if self._c is None:
                 raise InterfaceError("Cursor closed")
-            elif self._c._sock is None:
+            elif self._c.sock is None:
                 raise ConnectionClosedError()
             else:
                 raise e
@@ -146,9 +142,9 @@ class Cursor:
         rowcounts: list[int] = []
         for parameters in param_sets:
             await self.execute(operation, parameters)
-            rowcounts.append(self._row_count)
+            rowcounts.append(self.row_count)
 
-        self._row_count = -1 if -1 in rowcounts else sum(rowcounts)
+        self.row_count = -1 if -1 in rowcounts else sum(rowcounts)
         return self
 
     async def fetchone(self) -> Any:
@@ -175,41 +171,41 @@ class Cursor:
 
     async def fetchall(self) -> list[Any]:
         try:
-            generator = getattr(self, '_generator', None)
+            generator = getattr(self, 'generator', None)
             if generator is None:
                 if self.ps is None:
                     raise ProgrammingError("A query hasn't been issued.")
                 elif len(self.ps['row_desc']) == 0:
                     raise ProgrammingError("no result set")
                 return []
-            rows = list(self._cached_rows)
-            self._cached_rows.clear()
+            rows = list(self.cached_rows)
+            self.cached_rows.clear()
             async for state in generator:
                 if state in ("DATA_ROW", "DATA_BATCH"):
-                    rows.extend(self._cached_rows)
-                    self._cached_rows.clear()
+                    rows.extend(self.cached_rows)
+                    self.cached_rows.clear()
                 elif state == "COMMAND_COMPLETE":
-                    self._has_rows = len(rows) > 0
+                    self.has_rows = len(rows) > 0
                     continue
                 elif state in ("ROW_DESCRIPTION", "DESCRIPTION", "DBOS_COLUMN_DESCRIPTION"):
-                    self._has_rows = (
-                        len(self._cached_rows) > 0 or
+                    self.has_rows = (
+                        len(self.cached_rows) > 0 or
                         (self.ps is not None and len(self.ps.get('row_desc', [])) > 0)
                     )
-                    self._generator = generator
+                    self.generator = generator
                     return [list(r) for r in rows]
                 elif state == "READY_FOR_QUERY":
-                    self._generator = None
+                    self.generator = None
                     return [list(r) for r in rows]
                 elif state == "ERROR":
                     err = self._c.error if self._c is not None else None
                     if self._c is not None:
-                        await self._c._drain_protocol_generator(generator)
-                    self._generator = None
+                        await self._c.drain_protocol_generator(generator)
+                    self.generator = None
                     if err is not None:
                         raise ProgrammingError(err)
                     return [list(r) for r in rows]
-            self._generator = None
+            self.generator = None
             return [list(r) for r in rows]
         except TypeError:
             raise ProgrammingError("attempting to use unexecuted cursor")
@@ -219,11 +215,11 @@ class Cursor:
             await self._c.cancel(exec_gen)
 
     async def close(self) -> None:
-        generator = getattr(self, '_generator', None)
+        generator = getattr(self, 'generator', None)
         if generator is not None:
             if self._c is not None:
-                await self._c._drain_protocol_generator(generator)
-            self._generator = None
+                await self._c.drain_protocol_generator(generator)
+            self.generator = None
         self._c = None
 
     def __aiter__(self) -> Cursor:
@@ -248,9 +244,9 @@ class Cursor:
 
     async def _anext_internal(self) -> Any:
         try:
-            return self._cached_rows.popleft()
+            return self.cached_rows.popleft()
         except IndexError:
-            generator = getattr(self, '_generator', None)
+            generator = getattr(self, 'generator', None)
             if generator is not None:
                 while True:
                     try:
@@ -258,24 +254,24 @@ class Cursor:
                     except StopAsyncIteration:
                         break
                     if state in ("DATA_ROW", "DATA_BATCH"):
-                        if len(self._cached_rows) > 0:
-                            return self._cached_rows.popleft()
+                        if len(self.cached_rows) > 0:
+                            return self.cached_rows.popleft()
                     elif state == "COMMAND_COMPLETE":
-                        if not self._cached_rows:
+                        if not self.cached_rows:
                             raise StopAsyncIteration()
                         continue
                     elif state == "READY_FOR_QUERY":
-                        self._generator = None
+                        self.generator = None
                         raise StopAsyncIteration()
                     elif state == "ERROR":
                         err = self._c.error if self._c is not None else None
                         if self._c is not None:
-                            await self._c._drain_protocol_generator(generator)
-                        self._generator = None
+                            await self._c.drain_protocol_generator(generator)
+                        self.generator = None
                         if err is not None:
                             raise ProgrammingError(err)
                         raise StopAsyncIteration()
-                self._generator = None
+                self.generator = None
                 raise StopAsyncIteration()
 
             if self.ps is None:
@@ -286,24 +282,24 @@ class Cursor:
                 raise StopAsyncIteration()
 
     async def clear(self) -> None:
-        generator = getattr(self, '_generator', None)
+        generator = getattr(self, 'generator', None)
         if generator is not None:
             if self._c is not None:
-                await self._c._drain_protocol_generator(generator)
+                await self._c.drain_protocol_generator(generator)
             else:
                 async for _ in generator:
                     pass
-            self._generator = None
+            self.generator = None
 
         self.ps = None
-        self._row_count = -1
-        self._has_rows = False
-        self._cached_rows.clear()
+        self.row_count = -1
+        self.has_rows = False
+        self.cached_rows.clear()
 
     async def nextset(self) -> bool | None:
-        self._cached_rows.clear()
+        self.cached_rows.clear()
 
-        generator = getattr(self, '_generator', None)
+        generator = getattr(self, 'generator', None)
         if generator is None:
             return None
 
@@ -311,30 +307,30 @@ class Cursor:
             try:
                 state = await generator.__anext__()
             except StopAsyncIteration:
-                self._generator = None
+                self.generator = None
                 return None
 
             if state in ("ROW_DESCRIPTION", "DESCRIPTION", "DBOS_COLUMN_DESCRIPTION"):
-                self._has_rows = (
-                    len(self._cached_rows) > 0 or
+                self.has_rows = (
+                    len(self.cached_rows) > 0 or
                     (self.ps is not None and len(self.ps.get('row_desc', [])) > 0)
                 )
                 return True
             elif state == "COMMAND_COMPLETE":
                 continue
             elif state == "READY_FOR_QUERY":
-                self._generator = None
+                self.generator = None
                 return None
             elif state == "ERROR":
                 err = self._c.error if self._c is not None else None
                 if self._c is not None:
-                    await self._c._drain_protocol_generator(generator)
-                self._generator = None
+                    await self._c.drain_protocol_generator(generator)
+                self.generator = None
                 if err is not None:
                     raise ProgrammingError(err)
                 return None
             if state in ("DATA_ROW", "DATA_BATCH"):
-                self._has_rows = len(self._cached_rows) > 0
+                self.has_rows = len(self.cached_rows) > 0
                 return True
 
 

@@ -83,7 +83,7 @@ class NzPool:
         conn = Connection()
         merged = dict(_CONNECT_DEFAULTS)
         merged.update(self.kwargs)
-        await conn._connect(**merged)
+        await conn.connect(**merged)
         conn._nzpy_pool_created = time.monotonic()  # type: ignore[attr-defined]
         conn._nzpy_pool_uses = 0  # type: ignore[attr-defined]
         if self.on_connect is not None:
@@ -522,7 +522,7 @@ class AsyncNullPool:
         conn = Connection()
         merged = dict(_CONNECT_DEFAULTS)
         merged.update(self._kwargs)
-        await conn._connect(**merged)
+        await conn.connect(**merged)
         if self._on_connect is not None:
             result = self._on_connect(conn)
             if hasattr(result, '__await__'):

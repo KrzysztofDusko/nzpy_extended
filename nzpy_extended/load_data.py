@@ -17,7 +17,6 @@ async def load_data(
     distribute_on_random: bool = True,
     logdir: str | None = None,
     escape_char: str | None = '\\',
-    quoting: object | None = None,
 ) -> int:
     return await conn.load_data(
         table_name=table_name,
@@ -30,5 +29,4 @@ async def load_data(
         distribute_on_random=distribute_on_random,
         logdir=logdir,
         escape_char=escape_char,
-        quoting=quoting,
     )

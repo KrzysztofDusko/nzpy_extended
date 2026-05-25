@@ -1,4 +1,3 @@
-import asyncio
 import base64
 import logging
 import socket as _socket
@@ -11,7 +10,6 @@ from socket import gethostname
 from sys import argv
 from typing import Any
 
-from .buffered_stream import NzBufferedStream
 from .exceptions import InterfaceError
 from .protocol import (NULL_BYTE, ERROR_RESPONSE, AUTHENTICATION_REQUEST,
                        NOTICE_RESPONSE, BACKEND_KEY_DATA, READY_FOR_QUERY)
@@ -537,6 +535,7 @@ class SyncHandshake:
 
         elif areq == AUTH_REQ_KRB5:
             self.log.info("krb encryption requested from backend")
+            raise InterfaceError("KRB5 authentication not supported")
 
         return True
 

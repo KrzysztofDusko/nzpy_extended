@@ -58,4 +58,4 @@ class _SyncRunner:
             pass
 
 
-_runner: _SyncRunner = _SyncRunner()
+runner: _SyncRunner = _SyncRunner()

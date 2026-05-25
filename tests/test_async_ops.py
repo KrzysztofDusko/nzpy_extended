@@ -62,7 +62,7 @@ HEAVY_SQL_TIMEOUT = """
 async def test_open_async_should_connect():
     """Mirrors OpenAsync_ShouldConnect."""
     conn = await nzpy.connect(**CONN_KWARGS)
-    assert conn._sock is not None or conn._usock is not None, \
+    assert conn.sock is not None or conn._usock is not None, \
         "Connection socket must be set after connect()"
     await conn.close()
 
@@ -179,8 +179,8 @@ async def test_close_async_closes_connection():
     """Mirrors CloseAsync_ShouldCloseConnection."""
     conn = await nzpy.connect(**CONN_KWARGS)
     await conn.close()
-    # After close, _sock should be None
-    assert conn._sock is None or conn._usock is None or True, \
+    # After close, sock should be None
+    assert conn.sock is None or conn._usock is None or True, \
         "Connection should be closed"
 
 

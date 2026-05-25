@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable
 from typing import Any
 
 from ._constants import DEFAULT_BUFFER_SIZE
@@ -56,7 +56,7 @@ async def connect(
     buffer_size: int = DEFAULT_BUFFER_SIZE,
 ) -> Connection:
     conn = Connection()
-    await conn._connect(user, host, unix_sock, port, database, password, ssl,
+    await conn.connect(user, host, unix_sock, port, database, password, ssl,
                       securityLevel, timeout, application_name,
                       max_prepared_statements, datestyle, logLevel,
                       tcp_keepalive, char_varchar_encoding,

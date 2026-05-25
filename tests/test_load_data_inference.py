@@ -136,3 +136,39 @@ class TestLoadDataInference:
     @pytest.mark.asyncio
     async def test_unicode_text(self, con):
         await _do_test(con, "unicode_text.csv")
+
+
+@pytest.mark.asyncio
+async def test_load_data_boolean(con):
+    """External table load with BOOLEAN columns must work (regression)."""
+    cur = con.cursor()
+
+    # Test 1: Python bool values
+    table = "test_bool_load"
+    try:
+        await cur.execute(f"DROP TABLE {table}")
+    except Exception:
+        pass
+    rows = [[1, True], [2, False]]
+    cols = [("id", "INT"), ("flag", "BOOLEAN")]
+    count = await nzpy.load_data(con, table, rows, columns=cols, create_if_missing=True)
+    assert count == 2
+    await cur.execute(f"SELECT * FROM {table} ORDER BY id")
+    result = await cur.fetchall()
+    assert result[0] == [1, True]
+    assert result[1] == [2, False]
+    await cur.execute(f"DROP TABLE {table}")
+
+    # Test 2: String boolean values
+    rows2 = [[1, "t"], [2, "f"], [3, "TRUE"], [4, "FALSE"], [5, "1"], [6, "0"]]
+    count2 = await nzpy.load_data(con, table, rows2, columns=cols, create_if_missing=True)
+    assert count2 == 6
+    await cur.execute(f"SELECT * FROM {table} ORDER BY id")
+    result2 = await cur.fetchall()
+    assert result2[0][1] is True   # 't'
+    assert result2[1][1] is False  # 'f'
+    assert result2[2][1] is True   # 'TRUE'
+    assert result2[3][1] is False  # 'FALSE'
+    assert result2[4][1] is True   # '1'
+    assert result2[5][1] is False  # '0'
+    await cur.execute(f"DROP TABLE {table}")

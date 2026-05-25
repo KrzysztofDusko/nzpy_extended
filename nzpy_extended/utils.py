@@ -1,7 +1,7 @@
 import datetime
 import enum
 import re
-from collections.abc import Callable, Generator, Iterator, Awaitable
+from collections.abc import Callable, Generator
 from decimal import Decimal
 from json import dumps
 from struct import Struct
@@ -9,8 +9,6 @@ from typing import Any
 from uuid import UUID
 
 from .exceptions import (InterfaceError, ProgrammingError,
-                         ArrayContentNotHomogenousError,
-                         ArrayContentNotSupportedError,
                          ArrayDimensionsNotConsistentError)
 
 
@@ -252,7 +250,7 @@ def _sql_literal(value: object) -> str:
     return _quote_text_literal(str(value))
 
 
-def _render_prepared_statement(statement: str, args: tuple[Any, ...]) -> tuple[str, int]:
+def render_prepared_statement(statement: str, args: tuple[Any, ...]) -> tuple[str, int]:
     OUTSIDE = 0
     INSIDE_SQ = 1
     INSIDE_QI = 2
@@ -424,7 +422,7 @@ pg_to_py_encodings: dict[str, str | None] = {
     "latin8": "iso8859_14",
     "latin9": "iso8859_15",
     "sql_ascii": "ascii",
-    "win866": "cp886",
+    "win866": "cp866",
     "win874": "cp874",
     "win1250": "cp1250",
     "win1251": "cp1251",
@@ -563,7 +561,7 @@ def _infer_type_from_strings(str_vals: list[str]) -> str:
     return 'CLOB'
 
 
-def _infer_columns_from_rows(rows: list[Any]) -> list[tuple[str, str]]:
+def infer_columns_from_rows(rows: list[Any]) -> list[tuple[str, str]]:
     if not rows:
         return []
     ncols = len(rows[0])
@@ -592,7 +590,7 @@ def _infer_columns_from_rows(rows: list[Any]) -> list[tuple[str, str]]:
     return columns
 
 
-def _rows_to_csv_bytes(rows: list[Any], delimiter: str = '|', encoding: str = 'latin-1', escape_char: str | None = '\\',
+def rows_to_csv_bytes(rows: list[Any], delimiter: str = '|', encoding: str = 'latin-1', escape_char: str | None = '\\',
                        columns: list[tuple[str, str]] | None = None) -> bytes:
     parts: list[str] = []
     for row in rows:
@@ -604,10 +602,11 @@ def _rows_to_csv_bytes(rows: list[Any], delimiter: str = '|', encoding: str = 'l
                 fields.append('1' if val else '0')
             elif (isinstance(val, str) and columns is not None
                   and i < len(columns) and columns[i][1] == 'BOOLEAN'):
-                fields.append('1' if val.lower() in ('true', 't', 'yes', '1') else '0')
+                fields.append('1' if val.lower() in ('true', 't', 'yes', 'y', 'on', '1') else '0')
             else:
                 s = str(val)
-                if escape_char is not None and delimiter in s:
+                if escape_char is not None:
+                    s = s.replace(escape_char, escape_char + escape_char)
                     s = s.replace(delimiter, escape_char + delimiter)
                 fields.append(s)
         parts.append(delimiter.join(fields))
@@ -627,11 +626,11 @@ __all__ = [
     "min_int2", "max_int2", "min_int4", "max_int4",
     "min_int8", "max_int8",
     "convert_paramstyle", "_sql_literal",
-    "_render_prepared_statement",
+    "render_prepared_statement",
     "walk_array", "array_find_first_element", "array_flatten",
     "array_check_dimensions", "array_has_null",
     "array_dim_lengths",
     "pg_array_types", "pg_to_py_encodings",
-    "_infer_nz_type", "_infer_columns_from_rows",
-    "_rows_to_csv_bytes",
+    "_infer_nz_type", "infer_columns_from_rows",
+    "rows_to_csv_bytes",
 ]

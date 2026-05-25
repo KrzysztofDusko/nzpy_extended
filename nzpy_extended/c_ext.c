@@ -759,10 +759,10 @@ static PyObject* call_interval_to_text(int64_t interval_time, int interval_month
     static PyObject *cls = NULL;
     if (!cls) {
         PyObject *mod = PyImport_ImportModule("nzpy_extended.core");
-        if (!mod) return Py_None;
+        if (!mod) { PyErr_Clear(); Py_RETURN_NONE; }
         cls = PyObject_GetAttrString(mod, "Interval");
         Py_DECREF(mod);
-        if (!cls) return Py_None;
+        if (!cls) { PyErr_Clear(); Py_RETURN_NONE; }
     }
     return PyObject_CallFunction(cls, "Lii", interval_time, 0, interval_month);
 }
@@ -771,10 +771,10 @@ static PyObject* call_timetz_out(int64_t timetz_time, int timetz_zone) {
     static PyObject *func = NULL;
     if (!func) {
         PyObject *mod = PyImport_ImportModule("nzpy_extended.core");
-        if (!mod) return Py_None;
+        if (!mod) { PyErr_Clear(); Py_RETURN_NONE; }
         func = PyObject_GetAttrString(mod, "timetz_out_timetzadt");
         Py_DECREF(mod);
-        if (!func) return Py_None;
+        if (!func) { PyErr_Clear(); Py_RETURN_NONE; }
     }
     return PyObject_CallFunction(func, "Li", timetz_time, timetz_zone);
 }
@@ -783,10 +783,10 @@ static PyObject* call_timestamp2struct(int64_t workspace) {
     static PyObject *func = NULL;
     if (!func) {
         PyObject *mod = PyImport_ImportModule("nzpy_extended.core");
-        if (!mod) return Py_None;
+        if (!mod) { PyErr_Clear(); Py_RETURN_NONE; }
         func = PyObject_GetAttrString(mod, "timestamp2struct");
         Py_DECREF(mod);
-        if (!func) return Py_None;
+        if (!func) { PyErr_Clear(); Py_RETURN_NONE; }
     }
     return PyObject_CallFunction(func, "L", workspace);
 }

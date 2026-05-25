@@ -1,5 +1,3 @@
-from struct import Struct
-
 from .utils import i_pack
 
 NOTICE_RESPONSE = b"N"

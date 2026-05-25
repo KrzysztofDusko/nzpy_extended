@@ -1,7 +1,7 @@
 import asyncio
 import socket as _socket
 from ._constants import DEFAULT_BUFFER_SIZE
-from .buffer_pool import BufferPool, global_pool
+from .buffer_pool import global_pool
 
 
 class NzBufferedStream:

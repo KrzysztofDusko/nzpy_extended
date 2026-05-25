@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import socket
-from typing import Any, Callable, Final, Literal, TYPE_CHECKING
+from typing import Any, Callable, Literal
 
-from ._runner import _runner
+
+from ._runner import runner  # pyright: ignore[reportPrivateUsage]
 from .core import Connection
-if TYPE_CHECKING:
-    from collections.abc import Coroutine
 
 
 class SyncCursor:
@@ -14,24 +13,24 @@ class SyncCursor:
         self._c: Any = async_cursor
 
     def execute(self, sql: str, args: Any | None = None) -> None:
-        _runner.run(self._c.execute(sql, args))
+        runner.run(self._c.execute(sql, args))
 
     def executemany(self, sql: str, seq_of_args: list[Any]) -> None:
-        _runner.run(self._c.executemany(sql, seq_of_args))
+        runner.run(self._c.executemany(sql, seq_of_args))
 
     def fetchone(self) -> Any:
-        return _runner.run(self._c.fetchone())
+        return runner.run(self._c.fetchone())
 
     def fetchmany(self, num: int | None = None) -> list[Any]:
         if num is None:
             num = self.arraysize
-        return _runner.run(self._c.fetchmany(num))  # type: ignore[no-any-return]
+        return runner.run(self._c.fetchmany(num))  # type: ignore[no-any-return]
 
     def fetchall(self) -> list[Any]:
-        return _runner.run(self._c.fetchall())  # type: ignore[no-any-return]
+        return runner.run(self._c.fetchall())  # type: ignore[no-any-return]
 
     def nextset(self) -> Any:
-        return _runner.run(self._c.nextset())
+        return runner.run(self._c.nextset())
 
     @property
     def rowcount(self) -> int:
@@ -54,7 +53,7 @@ class SyncCursor:
         self._c.arraysize = value
 
     def cancel(self, exec_gen: Any = None) -> None:
-        _runner.run(self._c.cancel(exec_gen))
+        runner.run(self._c.cancel(exec_gen))
 
     def interrupt(self) -> None:
         self.cancel()
@@ -62,7 +61,7 @@ class SyncCursor:
     def close(self) -> None:
         try:
             if self._c is not None:
-                _runner.run(self._c.close())
+                runner.run(self._c.close())
         finally:
             self._c = None
 
@@ -107,7 +106,7 @@ class _TransactionContext:
         return self._conn
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> Literal[False]:
-        if self._conn._conn is None:
+        if self._conn._conn is None:  # pyright: ignore[reportPrivateUsage]
             return False
         if exc_type:
             try:
@@ -133,15 +132,15 @@ class SyncConnection:
 
     def commit(self) -> None:
         if self._conn is not None:
-            _runner.run(self._conn.commit())
+            runner.run(self._conn.commit())
 
     def rollback(self) -> None:
         if self._conn is not None:
-            _runner.run(self._conn.rollback())
+            runner.run(self._conn.rollback())
 
     def cancel(self, exec_gen: Any = None) -> None:
         if self._conn is not None:
-            _runner.run(self._conn.cancel(exec_gen))
+            runner.run(self._conn.cancel(exec_gen))
 
     def transaction(self) -> _TransactionContext:
         return _TransactionContext(self)
@@ -149,7 +148,7 @@ class SyncConnection:
     def close(self) -> None:
         try:
             if self._conn is not None:
-                _runner.run(self._conn.close())
+                runner.run(self._conn.close())
         finally:
             self._conn = None
 
@@ -217,7 +216,7 @@ async def _async_connect(
 ) -> Connection:
     conn = Connection()
     try:
-        await conn._connect(
+        await conn.connect(
             user=user,
             host=host,
             unix_sock=unix_sock,
@@ -271,7 +270,7 @@ def connect(
     connect_timeout: float | None = None,
     **kwargs: Any,
 ) -> SyncConnection:
-    async_conn = _runner.run(
+    async_conn = runner.run(
         _async_connect(
             user=user,
             host=host,

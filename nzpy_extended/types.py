@@ -1,18 +1,15 @@
-import datetime
 import enum
 from calendar import timegm
-from collections.abc import Callable
 from datetime import date, datetime as Datetime, time, timedelta as Timedelta
 from datetime import timezone as Timezone
-from decimal import Decimal
 from json import dumps
 from typing import Any
 
 from .utils import (
-    d_pack, d_unpack, dii_pack, f_unpack, h_le_unpack, h_pack,
-    i_le_unpack, i_pack, i_unpack, ii_unpack, iii_unpack,
+    d_pack, d_unpack, dii_pack,
+
     min_int4, max_int4, min_int8, max_int8,
-    q_le_unpack, q_pack, q_unpack, qii_pack,
+    q_pack, q_unpack, qii_pack,
 )
 
 ZERO: Timedelta = Timedelta(0)
@@ -34,7 +31,7 @@ class Interval:
     def _setMicroseconds(self, value: int) -> None:
         if not isinstance(value, int):
             raise TypeError("microseconds must be an integer type")
-        elif not (min_int8 < value < max_int8):
+        elif not (min_int8 < value <= max_int8):
             raise OverflowError(
                 "microseconds must be representable as a 64-bit integer")
         else:
@@ -43,7 +40,7 @@ class Interval:
     def _setDays(self, value: int) -> None:
         if not isinstance(value, int):
             raise TypeError("days must be an integer type")
-        elif not (min_int4 < value < max_int4):
+        elif not (min_int4 < value <= max_int4):
             raise OverflowError(
                 "days must be representable as a 32-bit integer")
         else:
@@ -52,7 +49,7 @@ class Interval:
     def _setMonths(self, value: int) -> None:
         if not isinstance(value, int):
             raise TypeError("months must be an integer type")
-        elif not (min_int4 < value < max_int4):
+        elif not (min_int4 < value <= max_int4):
             raise OverflowError(
                 "months must be representable as a 32-bit integer")
         else:
@@ -428,26 +425,26 @@ class DbosTupleDesc:
         self.EnableTime24: str | None = None
 
 
-_OID_BOOL: int = 16
-_OID_BYTEINT: int = 2500
-_OID_INT2: int = 21
-_OID_INT4: int = 23
-_OID_INT8: int = 20
-_OID_NUMERIC: int = 1700
-_OID_FLOAT4: int = 700
-_OID_FLOAT8: int = 701
-_OID_BPCHAR: int = 1042
-_OID_VARCHAR: int = 1043
-_OID_TEXT: int = 25
-_OID_DATE: int = 1082
-_OID_TIME: int = 1083
-_OID_TIMESTAMP: int = 1114
-_OID_TIMESTAMPTZ: int = 1184
-_OID_TIMETZ: int = 1266
-_OID_NCHAR: int = 2522
-_OID_NVARCHAR: int = 2530
+OID_BOOL: int = 16
+OID_BYTEINT: int = 2500
+OID_INT2: int = 21
+OID_INT4: int = 23
+OID_INT8: int = 20
+OID_NUMERIC: int = 1700
+OID_FLOAT4: int = 700
+OID_FLOAT8: int = 701
+OID_BPCHAR: int = 1042
+OID_VARCHAR: int = 1043
+OID_TEXT: int = 25
+OID_DATE: int = 1082
+OID_TIME: int = 1083
+OID_TIMESTAMP: int = 1114
+OID_TIMESTAMPTZ: int = 1184
+OID_TIMETZ: int = 1266
+OID_NCHAR: int = 2522
+OID_NVARCHAR: int = 2530
 
-_NZ_TYPE_NUMERIC: int = 7
+NZ_TYPE_NUMERIC: int = 7
 
 
 def date2j(y: int, m: int, d: int) -> int:
@@ -776,12 +773,12 @@ __all__ = [
     "EPOCH", "EPOCH_TZ", "EPOCH_SECONDS",
     "INFINITY_MICROSECONDS", "MINUS_INFINITY_MICROSECONDS",
     "J2000_OFFSET",
-    "_OID_BOOL", "_OID_BYTEINT", "_OID_INT2", "_OID_INT4",
-    "_OID_INT8", "_OID_NUMERIC", "_OID_FLOAT4", "_OID_FLOAT8",
-    "_OID_BPCHAR", "_OID_VARCHAR", "_OID_TEXT",
-    "_OID_DATE", "_OID_TIME", "_OID_TIMESTAMP", "_OID_TIMESTAMPTZ",
-    "_OID_TIMETZ", "_OID_NCHAR", "_OID_NVARCHAR",
-    "_NZ_TYPE_NUMERIC",
+    "OID_BOOL", "OID_BYTEINT", "OID_INT2", "OID_INT4",
+    "OID_INT8", "OID_NUMERIC", "OID_FLOAT4", "OID_FLOAT8",
+    "OID_BPCHAR", "OID_VARCHAR", "OID_TEXT",
+    "OID_DATE", "OID_TIME", "OID_TIMESTAMP", "OID_TIMESTAMPTZ",
+    "OID_TIMETZ", "OID_NCHAR", "OID_NVARCHAR",
+    "NZ_TYPE_NUMERIC",
     "date2j", "j2date", "time2struct", "timestamp2struct",
     "timetz_out_timetzadt", "EncodeTimeOnly", "EncodeTimeSpan",
     "IntervalToText", "interval2tm",

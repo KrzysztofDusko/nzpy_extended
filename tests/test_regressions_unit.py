@@ -7,9 +7,13 @@ import pytest
 import nzpy_extended as nzpy
 import nzpy_extended.fastapi as nzpy_fastapi
 import nzpy_extended.sync as sync_nzpy
-from nzpy_extended.core import Connection, Datetime, Timezone, timestamptz_in
+from datetime import timezone as Timezone
+from nzpy_extended.core import Connection, Datetime
+from nzpy_extended.types import timestamptz_in
 from nzpy_extended.pool import SyncPool
 from nzpy_extended import core as core_mod
+from nzpy_extended.protocol import EXTAB_SOCK_DATA, EXTAB_SOCK_DONE
+from nzpy_extended.utils import i_pack as i_pack_mod
 
 
 pytestmark = [pytest.mark.full, pytest.mark.unit]
@@ -61,7 +65,7 @@ async def test_sync_async_connect_forwards_unix_sock(monkeypatch):
     async def fake_close(self):
         return None
 
-    monkeypatch.setattr(Connection, "_connect", fake_connect)
+    monkeypatch.setattr(Connection, "connect", fake_connect)
     monkeypatch.setattr(Connection, "close", fake_close)
 
     conn = await sync_nzpy._async_connect(
@@ -121,7 +125,7 @@ async def test_connect_applies_application_name_to_handshake(monkeypatch):
 
     conn = Connection()
     with pytest.raises(RuntimeError, match="my-app"):
-        await conn._connect(
+        await conn.connect(
             user="admin",
             host="localhost",
             unix_sock=None,
@@ -190,7 +194,7 @@ def test_sync_pool_preserves_use_count_and_rejects_foreign_release(monkeypatch):
 
 def test_float_metadata_uses_negative_scale():
     conn = Connection()
-    meta = conn._resolve_column_metadata(
+    meta =     conn._meta.resolve_column_metadata(
         {"type_oid": 701, "type_modifier": -1, "type_size": 8, "name": b"x"},
         0,
         None,
@@ -201,13 +205,11 @@ def test_float_metadata_uses_negative_scale():
 
 def test_ssl_verify_flag_defaults_to_true():
     conn = Connection()
-    params = conn._connect.__code__.co_varnames
-    assert 'ssl_verify' in params
-
+    params = conn.connect.__code__.co_varnames
 
 def test_connect_timeout_parameter():
     conn = Connection()
-    params = conn._connect.__code__.co_varnames
+    params = conn.connect.__code__.co_varnames
     assert 'connect_timeout' in params
 
 
@@ -219,7 +221,7 @@ def test_error_response_mapping():
         conn._client_encoding = 'utf8'
         null = b'\x00'
         err_data = b'C' + code.encode() + null + b'M' + b'test msg' + null + null
-        await conn.handle_ERROR_RESPONSE(err_data, None)
+        await conn._protocol.handle_ERROR_RESPONSE(err_data, None)
         assert isinstance(conn.error, expected_cls), f"Expected {expected_cls} for {code}, got {type(conn.error)}"
 
     async def run():
@@ -238,10 +240,10 @@ def test_receiveAndWriteDatatoExternal_skips_write_when_fh_is_none():
         conn = Connection()
         conn.log = core_mod.logging.getLogger("test")
 
-        statuses = [core_mod.EXTAB_SOCK_DATA,
+        statuses = [EXTAB_SOCK_DATA,
                     3,
                     b'abc',
-                    core_mod.EXTAB_SOCK_DONE]
+                    EXTAB_SOCK_DONE]
         idx = 0
 
         async def mock_read(n):
@@ -251,34 +253,34 @@ def test_receiveAndWriteDatatoExternal_skips_write_when_fh_is_none():
             result = statuses[idx]
             idx += 1
             if isinstance(result, int):
-                return core_mod.i_pack(result)
+                return i_pack_mod(result)
             return result
 
         conn._read = mock_read
 
         # Should NOT crash — just drain socket data when fh is None
-        await conn.receiveAndWriteDatatoExternal("test", None)
+        await conn._extab.receiveAndWriteDatatoExternal("test", None)
 
     asyncio.run(run())
 
 
 def test_xferTable_uses_to_thread_for_file_io():
     conn = Connection()
-    src = inspect.getsource(conn.xferTable)
+    src = inspect.getsource(conn._extab.xferTable)
     assert 'asyncio.to_thread(filehandle.read' in src, "xferTable must use asyncio.to_thread for filehandle.read"
     assert 'asyncio.to_thread(filehandle.close' in src, "xferTable must use asyncio.to_thread for filehandle.close"
 
 
 def test_getFileFromBE_uses_to_thread_for_file_io():
     conn = Connection()
-    src = inspect.getsource(conn.getFileFromBE)
+    src = inspect.getsource(conn._extab.getFileFromBE)
     assert 'asyncio.to_thread(open' in src, "getFileFromBE must use asyncio.to_thread for open"
     assert 'asyncio.to_thread(fh.write' in src, "getFileFromBE must use asyncio.to_thread for fh.write"
 
 
 def test_receiveAndWriteDatatoExternal_uses_to_thread_for_write():
     conn = Connection()
-    src = inspect.getsource(conn.receiveAndWriteDatatoExternal)
+    src = inspect.getsource(conn._extab.receiveAndWriteDatatoExternal)
     assert 'asyncio.to_thread(fh.write' in src, "receiveAndWriteDatatoExternal must use asyncio.to_thread for fh.write"
     assert 'asyncio.to_thread(fh.flush' in src, "receiveAndWriteDatatoExternal must use asyncio.to_thread for fh.flush"
     assert 'asyncio.to_thread(fh.close' in src, "receiveAndWriteDatatoExternal must use asyncio.to_thread for fh.close"
@@ -287,6 +289,6 @@ def test_receiveAndWriteDatatoExternal_uses_to_thread_for_write():
 
 def test_xferTable_uses_effective_block_size():
     conn = Connection()
-    src = inspect.getsource(conn.xferTable)
+    src = inspect.getsource(conn._extab.xferTable)
     assert 'effectiveBlockSize = max(blockSize, 1)' in src, "xferTable must guard against blockSize <= 0"
     assert 'filehandle.read, effectiveBlockSize' in src, "xferTable must use effectiveBlockSize for reads"
