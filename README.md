@@ -277,6 +277,104 @@ count = conn.load_data("my_table", rows=generate_rows(50000))
 
 **Auto-infer column types:** When `columns` is `None` and `create_if_missing=True`, the driver reads the first row and maps Python types to Netezza DDL: `int` → `SMALLINT`/`INT`/`BIGINT`, `float` → `FLOAT`, `str` → `VARCHAR(255)`, `Decimal` → `NUMERIC(p,s)`, `bool` → `BOOLEAN`, `date` → `DATE`, `datetime` → `TIMESTAMP`, `bytes` → `BYTEA`. Column names default to `col1`, `col2`, etc.
 
+### Metadata API (catalog introspection)
+
+The `conn.meta` object provides async access to Netezza system catalog views — tables, columns, views, procedures, distribution keys, storage stats, sessions, and more. All queries run against the current database; connect to `SYSTEM` for system-wide objects.
+
+```python
+import nzpy_extended as nzpy
+
+async def main():
+    conn = await nzpy.connect(user="admin", password="password",
+                              host="netezza-host", database="mydb")
+
+    # --- Schemas & databases ---
+    schemas = await conn.meta.get_schemas()       # ["ADMIN", "INFORMATION_SCHEMA", ...]
+    dbs     = await conn.meta.get_databases()     # ["JUST_DATA", "SYSTEM", ...]
+    db_name = await conn.meta.get_current_database()   # "JUST_DATA"
+
+    # --- Tables ---
+    tables = await conn.meta.get_tables(schema="ADMIN")
+    # [{"schema": "ADMIN", "table_name": "DIMDATE", "owner": "ADMIN",
+    #   "objtype": "TABLE", "objid": 123456, "row_count": 500000}, ...]
+
+    tables = await conn.meta.get_tables(
+        schema="ADMIN", table_pattern="DIM%", include_system=False,
+    )
+
+    # --- Views (includes view definition SQL) ---
+    views = await conn.meta.get_views(schema="ADMIN")
+    # [{"schema": "ADMIN", "view_name": "V_SALES", "owner": "ADMIN",
+    #   "objid": 789012, "definition": "CREATE VIEW V_SALES AS SELECT ..."}, ...]
+
+    # --- Columns ---
+    cols = await conn.meta.get_columns("DIMDATE", schema="ADMIN")
+    # [{"column_name": "DATEKEY", "ordinal": 1,
+    #   "data_type": "DATE", "nullable": "N"}, ...]
+
+    # Dot-notation also works:
+    cols = await conn.meta.get_columns("ADMIN.DIMDATE")
+
+    # --- Distribution key ---
+    dk = await conn.meta.get_distribution_key("FACT_SALES", schema="ADMIN")
+    # ["CUSTOMER_ID"]  or [] for RANDOM distribution
+
+    # --- Table sizes ---
+    sizes = await conn.meta.get_table_sizes(schema="ADMIN")
+    # [{"schema": "ADMIN", "table_name": "FACT_SALES",
+    #   "used_bytes": 500000000, "allocated_bytes": 600000000,
+    #   "size_mb": 476, "skew": 1.2}, ...]
+
+    # --- Stored procedures ---
+    procs = await conn.meta.get_procedures(schema="ADMIN")
+    # [{"schema": "ADMIN", "proc_name": "SP_LOAD_DATA",
+    #   "owner": "ADMIN", "signature": "SP_LOAD_DATA(VARCHAR(256))",
+    #   "returns": "INTEGER", "source": "CREATE PROCEDURE ..."}, ...]
+
+    # --- Sequences & synonyms ---
+    seqs = await conn.meta.get_sequences(schema="ADMIN")
+    syns = await conn.meta.get_synonyms(schema="ADMIN")
+
+    # --- Sessions ---
+    sessions = await conn.meta.get_sessions()
+    # [{"session_id": 123, "username": "ADMIN", "database_name": "JUST_DATA",
+    #   "conntime": datetime(...), "priority": 0, "status": "active"}, ...]
+
+    # --- Users & groups ---
+    users  = await conn.meta.get_users()
+    groups = await conn.meta.get_groups()
+
+    # --- Query history (requires history collection enabled) ---
+    history = await conn.meta.get_query_history(limit=50, username="ADMIN")
+
+    # --- Search across tables, views, procedures ---
+    results = await conn.meta.search_objects("SALES%", schema="ADMIN")
+    # [{"object_type": "TABLE", "schema": "ADMIN",
+    #   "object_name": "FACT_SALES", "owner": "ADMIN", "objid": 123}, ...]
+
+asyncio.run(main())
+```
+
+| Method | Returns | Notes |
+|---|---|---|
+| `get_schemas()` | `list[str]` | All schemas in current database |
+| `get_databases()` | `list[str]` | All databases visible to user |
+| `get_current_database()` | `str` | Current database name |
+| `get_current_schema()` | `str` | Current schema (search path) |
+| `get_tables(schema, pattern, include_system)` | `list[dict]` | Tables: `schema`, `table_name`, `owner`, `objtype`, `objid`, `row_count` |
+| `get_views(schema, pattern)` | `list[dict]` | Views: `schema`, `view_name`, `owner`, `objid`, `definition` (SQL!) |
+| `get_columns(table, schema)` | `list[dict]` | Columns: `column_name`, `ordinal`, `data_type`, `nullable`, `objid` |
+| `get_distribution_key(table, schema)` | `list[str]` | Distribution column names (empty = RANDOM) |
+| `get_table_sizes(schema, pattern)` | `list[dict]` | Sizes: `used_bytes`, `allocated_bytes`, `size_mb`, `skew` |
+| `get_procedures(schema, pattern)` | `list[dict]` | Procs: `schema`, `proc_name`, `owner`, `signature`, `returns`, `source` |
+| `get_sequences(schema)` | `list[dict]` | Sequences: `schema`, `seq_name`, `owner`, `objid` |
+| `get_synonyms(schema)` | `list[dict]` | Synonyms: `schema`, `synonym_name`, `ref_database`, `ref_schema`, `referenced_object` |
+| `get_sessions()` | `list[dict]` | Active sessions: `session_id`, `username`, `database_name`, `conntime`, `priority` |
+| `get_users()` | `list[dict]` | Users: `username`, `objid` |
+| `get_groups()` | `list[dict]` | Groups: `groupname`, `objid` |
+| `get_query_history(limit, user)` | `list[dict]` | History: `session_id`, `username`, `query_text`, `submit_time`, `result_rows` |
+| `search_objects(pattern, schema)` | `list[dict]` | Unified search: `object_type` (TABLE/VIEW/PROCEDURE), `schema`, `object_name` |
+
 ## API Reference
 
 | Feature | Async | Sync | Notes |
@@ -306,6 +404,7 @@ count = conn.load_data("my_table", rows=generate_rows(50000))
 | `transaction()` | — | `conn.transaction()` | Context manager |
 | `load_data()` | `await nzpy.load_data(...)` | `nzpy.sync.load_data(...)` | Bulk insert via external table |
 | `conn.load_data()` | `await conn.load_data(...)` | `conn.load_data(...)` | Method form |
+| `conn.meta.get_tables()` | `await conn.meta.get_tables(...)` | — | Catalog metadata (async only) |
 | `NzPool` / `SyncPool` | `nzpy.NzPool(...)` | `nzpy.SyncPool(...)` | Connection pooling |
 
 ## Documentation
@@ -316,6 +415,7 @@ count = conn.load_data("my_table", rows=generate_rows(50000))
   - [`pep249_compliance.md`](docs/pep249_compliance.md) — PEP 249 compliance table
   - [`pool.md`](docs/pool.md) — Connection pool documentation
   - [`load_data.md`](docs/load_data.md) — Bulk data loading
+  - [`metadata_api.md`](docs/metadata_api.md) — Catalog introspection API
 - [GitHub Wiki](https://github.com/KrzysztofDusko/nzpy_extended/wiki)
 - [Issue tracker](https://github.com/KrzysztofDusko/nzpy_extended/issues)
 

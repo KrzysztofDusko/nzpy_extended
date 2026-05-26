@@ -17,6 +17,7 @@ from nzpy_extended.core import (ArrayContentNotHomogenousError,
                        Time, TimeFromTicks, Timestamp, TimestampFromTicks,
                        Warning, load_data)
 from nzpy_extended.pool import AsyncNullPool, NullPool, NzPool, SyncPool
+from nzpy_extended._metadata_api import ConnectionMetadataProvider
 
 from . import sync
 
@@ -96,5 +97,6 @@ __all__ = [
     "PGTsvector", "PGText", "PGVarchar",
     "NzPool", "SyncPool", "NullPool", "AsyncNullPool",
     "sync", "load_data",
+    "ConnectionMetadataProvider",
     "DEFAULT_BUFFER_SIZE",
 ]

@@ -185,11 +185,13 @@ class Connection:
         from ._dbos import DbosParser
         from ._extab import ExternalTableManager
         from ._metadata import MetadataResolver
+        from ._metadata_api import ConnectionMetadataProvider
 
         self._protocol = ProtocolHandler(self)
         self._dbos = DbosParser(self)
         self._extab = ExternalTableManager(self)
         self._meta = MetadataResolver()
+        self.meta = ConnectionMetadataProvider(self)
 
     async def connect(
             self, user: str | bytes, host: str | None, unix_sock: str | None, port: int,
