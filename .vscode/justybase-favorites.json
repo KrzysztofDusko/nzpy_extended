@@ -1,0 +1,155 @@
+{
+  "version": 1,
+  "favorites": [
+    {
+      "id": "69dd93db-0afd-4665-bc7f-ae715b04e1bf",
+      "type": "object",
+      "connectionName": "NZ",
+      "dbName": "JUST_DATA",
+      "schema": "ADMIN",
+      "objType": "TABLE",
+      "label": "DIMACCOUNT",
+      "timestamp": 1771698831120,
+      "owner": "ADMIN",
+      "description": "xyz",
+      "parentId": "b74ac408-4dd7-4ec2-bc97-ccd21855453a",
+      "enabled": true,
+      "autoInclude": true
+    },
+    {
+      "id": "6cde1f64-6d5b-4bf7-9899-b017d414fb54",
+      "type": "sql",
+      "label": "AAA",
+      "sqlContent": "SELECT * FROM DIMDATE\r\n",
+      "timestamp": 1771699214527
+    },
+    {
+      "id": "b74ac408-4dd7-4ec2-bc97-ccd21855453a",
+      "type": "folder",
+      "label": "dmy",
+      "timestamp": 1771699759449
+    },
+    {
+      "id": "8ddb6ed6-67b9-4802-9e50-83177e10e866",
+      "type": "object",
+      "connectionName": "NZ",
+      "dbName": "JUST_DATA",
+      "schema": "ADMIN",
+      "objType": "TABLE",
+      "label": "DEPARTMENT",
+      "timestamp": 1771700688953,
+      "owner": "ADMIN",
+      "description": null,
+      "parentId": "b74ac408-4dd7-4ec2-bc97-ccd21855453a"
+    },
+    {
+      "id": "481fdf44-1a0c-4bc2-bb19-ea88170410e4",
+      "type": "object",
+      "connectionName": "NZ",
+      "dbName": "JUST_DATA",
+      "schema": "ADMIN",
+      "objType": "TABLE",
+      "label": "DIMACCOUNT_CPY_096",
+      "timestamp": 1771701386641,
+      "owner": "ADMIN",
+      "description": null,
+      "parentId": "b74ac408-4dd7-4ec2-bc97-ccd21855453a"
+    },
+    {
+      "id": "690cd85c-3ca7-45ad-a596-583eed56c320",
+      "type": "object",
+      "connectionName": "NZ",
+      "dbName": "JUST_DATA",
+      "schema": "ADMIN",
+      "objType": "TABLE",
+      "label": "DIMDATE",
+      "timestamp": 1771701440208,
+      "owner": "ADMIN",
+      "description": "test comment"
+    },
+    {
+      "id": "9f9c7d76-8ebf-4495-857a-b100d1f67c46",
+      "type": "object",
+      "connectionName": "NZ",
+      "dbName": "JUST_DATA",
+      "schema": "ADMIN",
+      "objType": "TABLE",
+      "label": "DIMDEPARTMENTGROUP",
+      "timestamp": 1771751445686,
+      "owner": "ADMIN",
+      "description": null
+    },
+    {
+      "id": "50d698db-21a4-4458-a4c5-2907e5e2ab9e",
+      "type": "object",
+      "connectionName": "NZ",
+      "dbName": "JUST_DATA",
+      "schema": "ADMIN",
+      "objType": "TABLE",
+      "label": "DIMACCOUNT_CPY_030",
+      "timestamp": 1771751483481,
+      "owner": "ADMIN",
+      "description": null
+    },
+    {
+      "id": "602ace08-54af-443b-ad56-3d1c339dd818",
+      "type": "object",
+      "connectionName": "NZ",
+      "dbName": "JUST_DATA",
+      "schema": "ADMIN",
+      "objType": "TABLE",
+      "label": "DIMACCOUNT_CPY_0105",
+      "timestamp": 1771751969594,
+      "owner": "ADMIN",
+      "description": null
+    },
+    {
+      "id": "52419589-8079-408a-9d09-1a71bceec580",
+      "type": "object",
+      "connectionName": "NZ",
+      "dbName": "JUST_DATA",
+      "schema": "ADMIN",
+      "objType": "TABLE",
+      "label": "DIMACCOUNT_CPY_0122",
+      "timestamp": 1771751975188,
+      "owner": "ADMIN",
+      "description": null
+    },
+    {
+      "id": "e84a53ef-b425-40ee-a2ee-8542b316d31a",
+      "type": "object",
+      "connectionName": "NZ",
+      "dbName": "JUST_DATA",
+      "schema": "ADMIN",
+      "objType": "TABLE",
+      "label": "DIMACCOUNT_CPY_025",
+      "timestamp": 1771751978573,
+      "owner": "ADMIN",
+      "description": null
+    },
+    {
+      "id": "6c99b2d0-24d3-4f76-b74d-efa1fe6bc3ca",
+      "type": "object",
+      "connectionName": "NZ",
+      "dbName": "JUST_DATA",
+      "schema": "ADMIN",
+      "objType": "TABLE",
+      "label": "IMPORT_20260210_9411",
+      "timestamp": 1771751980907,
+      "owner": "ADMIN",
+      "description": null
+    },
+    {
+      "id": "4c54f812-ca6d-4a89-9b3d-9244d27b3b94",
+      "type": "object",
+      "connectionName": "NZ",
+      "dbName": "JUST_DATA_2",
+      "schema": "ADMIN",
+      "objType": "TABLE",
+      "label": "FACT_SALES_2",
+      "timestamp": 1771870524752,
+      "owner": "ADMIN",
+      "description": null
+    }
+  ]
+}

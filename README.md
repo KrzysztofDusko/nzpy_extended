@@ -10,8 +10,7 @@
 | Supported Python | 3.5+ | **3.12, 3.13, 3.14** |
 | Platform wheels | ❌ None | ✅ Linux x64, macOS ARM, Windows x64 (pre-built) |
 | Async support | ❌ | ✅ Fully async API |
-
-Performance gains vary by data type. For mixed-type workloads (most representative of real-world queries), nzpy_extended reaches **~49 000 rows/s with C extension** (vs. ~5‬400 rows/s for official nzpy — a **~9×** improvement on WSL2) and **~33 000 rows/s without C extension** (~6× improvement). Per-type benchmarks with 100 k rows:
+| Sync API (DB-API 2.0) | ✅ | ✅ Full feature parity with async |
 
 ### Windows 11
 
@@ -78,28 +77,78 @@ For other platforms or Python versions, `pip install` will compile the C extensi
 import nzpy_extended.sync as nzpy
 
 conn = nzpy.connect(
-    user="admin", password="secret",
+    user="admin", password="password",
     host="netezza-host", database="mydb",
 )
+
+# --- Basic query ---
 with conn.cursor() as cur:
-    cur.execute("SELECT id, name FROM users WHERE active = ?", (1,))
-    for row in cur:
-        print(row)
+    cur.execute("SELECT 1")
+    print(cur.fetchone())  # [1]
 
-# Cancel a running query. The connection remains usable afterwards.
-conn.cancel()
+# --- One-shot convenience (pyodbc pattern) ---
+row = conn.execute("SELECT version()").fetchone()
+print(row[0])
 
-# Interrupt alias (same as cancel)
-cur.interrupt()
+# --- Parameter binding ---
+cur.execute("SELECT id, name FROM users WHERE active = ?", (1,))
+for row in cur:
+    print(row)
 
-# Explicit transaction control
+# --- Cursor iteration (batched, arraysize=100) ---
+cur.execute("SELECT * FROM large_table")
+for row in cur:            # fetches 100 rows per round-trip
+    process(row)
+
+# --- Method chaining (PEP 249) ---
+rows = cur.execute("SELECT 1, 2, 3").fetchall()
+
+# --- Explicit transaction control ---
+conn.autocommit = False
+cur.execute("INSERT INTO users (name) VALUES ('Alice')")
+cur.execute("INSERT INTO users (name) VALUES ('Bob')")
+conn.commit()               # or conn.rollback()
+conn.autocommit = True
+
+# --- Transaction context manager ---
 with conn.transaction():
-    cur.execute("INSERT INTO users (name) VALUES ('Alice')")
+    cur.execute("INSERT INTO users (name) VALUES ('Charlie')")
     # auto-commits on success, auto-rollbacks on exception
 
-# Rows are returned as lists (DB-API compliant sequences)
-row = cur.fetchone()  # [1, 'Alice']
-rows = cur.fetchall()  # [[2, 'Bob'], [3, 'Charlie']]
+# --- Timeout (pyodbc-compatible properties) ---
+conn.timeout = 5.0          # default for all new cursors
+cur = conn.cursor()         # inherits timeout=5.0
+cur.execute("SELECT ...")   # raises OperationalError after 5s
+
+cur.timeout = 10.0          # per-cursor override
+cur.execute("SELECT ...", timeout=3.0)  # per-execute override wins
+
+# --- Stored procedures ---
+result = cur.callproc("sp_add_numbers", [10, 20])
+rows = cur.fetchall()
+
+# --- Server notices (RAISE NOTICE) ---
+for msg in cur.messages:
+    print("Notice:", msg)
+
+# --- PEP 249 rownumber ---
+cur.execute("SELECT * FROM t")
+print(cur.rownumber)  # 0
+cur.fetchone()
+print(cur.rownumber)  # 1
+
+# --- Column metadata ---
+desc = cur.description       # 7-tuple after execute()
+schema = cur.get_schema_table()  # rich metadata as list[dict]
+
+# --- Cancel / interrupt ---
+conn.cancel()                # stops running query, session survives
+cur.interrupt()              # alias
+
+# --- Connection state ---
+print(conn.closed)           # False
+conn.close()
+print(conn.closed)           # True
 ```
 
 ### Async — FastAPI, asyncio
@@ -110,12 +159,33 @@ import nzpy_extended as nzpy
 
 async def main():
     async with await nzpy.connect(
-        user="admin", password="secret",
+        user="admin", password="password",
         host="netezza-host", database="mydb",
     ) as conn:
+        # --- Basic query ---
         async with conn.cursor() as cur:
             await cur.execute("SELECT id, name FROM users WHERE active = ?", (1,))
             return await cur.fetchall()
+
+        # --- One-shot convenience ---
+        row = await (await conn.execute("SELECT version()")).fetchone()
+
+        # --- Async iteration (streaming) ---
+        cur = conn.cursor()
+        await cur.execute("SELECT * FROM large_table")
+        async for row in cur:
+            process(row)
+
+        # --- Timeout ---
+        await cur.execute("SELECT pg_sleep(999)", timeout=3.0)
+        # raises OperationalError after 3s
+
+        # --- Stored procedures ---
+        result = await cur.callproc("sp_add_numbers", [10, 20])
+
+        # --- Notices ---
+        for msg in cur.messages:
+            print("Notice:", msg)
 
 asyncio.run(main())
 ```
@@ -130,7 +200,7 @@ import nzpy_extended.fastapi as nzpy_fastapi
 pool = nzpy.NzPool(
     min_size=2, max_size=10,
     host="netezza-host", database="mydb",
-    user="admin", password="secret",
+    user="admin", password="password",
 )
 
 app = FastAPI(lifespan=nzpy_fastapi.lifespan(pool))
@@ -142,28 +212,43 @@ async def get_users(conn=Depends(nzpy_fastapi.get_connection)):
         return await cur.fetchall()
 ```
 
+### Sync connection pool
+
+```python
+import nzpy_extended.sync as nzpy
+from nzpy_extended import SyncPool
+
+pool = SyncPool(
+    min_size=2, max_size=10,
+    host="netezza-host", database="mydb",
+    user="admin", password="password",
+)
+with pool.connection() as conn:
+    conn.execute("SELECT 1").fetchone()
+pool.close_all()
+```
+
 ### Bulk data loading via external table protocol
 
 `load_data()` inserts rows from a Python iterable into a Netezza table using the native external table protocol (`REMOTESOURCE 'python'`). It supports optional automatic table creation.
 
 ```python
-# --- Auto-infer: create table + load in one step ---
+# --- Sync ---
+import nzpy_extended.sync as nzpy
+conn = nzpy.connect(...)
+count = conn.load_data("my_table", [(1, "Alice"), (2, "Bob")])
+
+# --- Async ---
+import nzpy_extended as nzpy
+count = await nzpy.load_data(conn, "my_table", [(1, "Alice"), (2, "Bob")])
+
+# --- Auto-infer types from data ---
 rows = [(1, "Alice", 100.50), (2, "Bob", 200.75)]
-count = await nzpy.load_data(conn, "my_table", rows)
-print(f"Inserted {count} rows")
+count = conn.load_data("my_table", rows)
+# Creates: col1 SMALLINT, col2 VARCHAR(255), col3 NUMERIC
 
-# --- Mixed types with auto-infer (INT, VARCHAR, NUMERIC, BOOLEAN, DATE) ---
-from decimal import Decimal
-from datetime import date
-rows = [
-    (10, "item", Decimal("19.99"), True, date(2025, 1, 15)),
-]
-count = await conn.load_data("products", rows)
-# Creates: col1 SMALLINT, col2 VARCHAR(255), col3 NUMERIC(4,2),
-#          col4 BOOLEAN, col5 DATE
-
-# --- Explicit columns (no auto-infer) ---
-count = await conn.load_data(
+# --- Explicit columns ---
+count = conn.load_data(
     table_name="products",
     rows=[(101, "Widget", 9.99)],
     columns=[("id", "INT"), ("name", "VARCHAR(200)"), ("price", "NUMERIC(10,2)")],
@@ -173,8 +258,7 @@ count = await conn.load_data(
 def generate_rows(n):
     for i in range(n):
         yield (i, f"item_{i}")
-
-count = await nzpy.load_data(conn, "my_table", rows=generate_rows(50000))
+count = conn.load_data("my_table", rows=generate_rows(50000))
 ```
 
 **Parameters:**
@@ -183,29 +267,62 @@ count = await nzpy.load_data(conn, "my_table", rows=generate_rows(50000))
 |---|---|---|
 | `conn` / `table_name` / `rows` | (required) | Connection, target table, row iterable |
 | `columns` | `None` | `[(name, nz_type), ...]` or `None` for auto-infer from data |
-| `delimiter` | `'\|'` | Field delimiter (pipe is safe; use `,` with `escape_char`) |
-| `encoding` | `'LATIN9'` | Text encoding (use `'UTF8'` for NVARCHAR columns) |
+| `delimiter` | `'\|'` | Field delimiter |
+| `encoding` | `'LATIN9'` | Text encoding (`'UTF8'` for NVARCHAR) |
 | `create_if_missing` | `True` | Auto-create table if not exists |
 | `temporary` | `False` | Create TEMP TABLE |
-| `distribute_on_random` | `True` | Add `DISTRIBUTE ON RANDOM` to DDL |
+| `distribute_on_random` | `True` | Add `DISTRIBUTE ON RANDOM` |
 | `logdir` | temp dir | Netezza log directory |
-| `escape_char` | `'\\'` | Escape character for delimiter within values (`None` to disable) |
+| `escape_char` | `'\\'` | Escape character for delimiter within values |
 
 **Auto-infer column types:** When `columns` is `None` and `create_if_missing=True`, the driver reads the first row and maps Python types to Netezza DDL: `int` → `SMALLINT`/`INT`/`BIGINT`, `float` → `FLOAT`, `str` → `VARCHAR(255)`, `Decimal` → `NUMERIC(p,s)`, `bool` → `BOOLEAN`, `date` → `DATE`, `datetime` → `TIMESTAMP`, `bytes` → `BYTEA`. Column names default to `col1`, `col2`, etc.
 
-**Note on delimiters and escaping:** Netezza external tables do not support standard CSV double-quote quoting. When a value contains the delimiter character, it must be escaped with the escape character (default: `\`). The driver does this automatically.
+## API Reference
 
-The function is available both as a standalone `nzpy.load_data()` and as `conn.load_data()`.
+| Feature | Async | Sync | Notes |
+|---|---|---|---|
+| `connect()` | `nzpy.connect(...)` | `nzpy.sync.connect(...)` | |
+| `cursor()` | `conn.cursor()` | `conn.cursor()` | Returns `Cursor` / `SyncCursor` |
+| `execute(sql, params)` | `await cur.execute(...)` | `cur.execute(...)` | PEP 249, returns cursor |
+| `executemany(sql, seq)` | `await cur.executemany(...)` | `cur.executemany(...)` | Partial failure preserves rowcount |
+| `callproc(name, params)` | `await cur.callproc(...)` | `cur.callproc(...)` | `CALL proc_name(args)` |
+| `fetchone()` | `await cur.fetchone()` | `cur.fetchone()` | Returns row or `None` |
+| `fetchmany(n)` | `await cur.fetchmany(n)` | `cur.fetchmany(n)` | Default `arraysize=100` |
+| `fetchall()` | `await cur.fetchall()` | `cur.fetchall()` | |
+| `nextset()` | `await cur.nextset()` | `cur.nextset()` | |
+| `description` | `cur.description` | `cur.description` | 7-tuple, available after execute |
+| `rowcount` | `cur.rowcount` | `cur.rowcount` | Rows affected |
+| `rownumber` | `cur.rownumber` | `cur.rownumber` | PEP 249, 0-based index |
+| `messages` | `cur.messages` | `cur.messages` | Server notices |
+| `arraysize` | `cur.arraysize` | `cur.arraysize` | Default 100 |
+| `get_schema_table()` | `cur.get_schema_table()` | `cur.get_schema_table()` | Rich metadata |
+| `conn.execute(sql)` | `await conn.execute(...)` | `conn.execute(...)` | One-shot convenience |
+| `conn.timeout` | — | `conn.timeout = N` | Default timeout for cursors |
+| `cur.timeout` | — | `cur.timeout = N` | Per-cursor timeout |
+| `autocommit` | `conn.autocommit` | `conn.autocommit` | Get/set, default `True` |
+| `closed` | — | `conn.closed` | Read-only |
+| `commit()` / `rollback()` | `await conn.commit()` | `conn.commit()` | |
+| `cancel()` | `await conn.cancel()` | `conn.cancel()` | Session survives |
+| `transaction()` | — | `conn.transaction()` | Context manager |
+| `load_data()` | `await nzpy.load_data(...)` | `nzpy.sync.load_data(...)` | Bulk insert via external table |
+| `conn.load_data()` | `await conn.load_data(...)` | `conn.load_data(...)` | Method form |
+| `NzPool` / `SyncPool` | `nzpy.NzPool(...)` | `nzpy.SyncPool(...)` | Connection pooling |
+
+## Documentation
+
+- `docs/` folder in the repository:
+  - [`timeout_and_cancel.md`](docs/timeout_and_cancel.md) — Timeout and cancel mechanisms
+  - [`sync_api.md`](docs/sync_api.md) — Full sync API reference
+  - [`pep249_compliance.md`](docs/pep249_compliance.md) — PEP 249 compliance table
+  - [`pool.md`](docs/pool.md) — Connection pool documentation
+  - [`load_data.md`](docs/load_data.md) — Bulk data loading
+- [GitHub Wiki](https://github.com/KrzysztofDusko/nzpy_extended/wiki)
+- [Issue tracker](https://github.com/KrzysztofDusko/nzpy_extended/issues)
 
 ## Requirements
 
 - Python ≥ 3.12
 - CPython (PyPy not supported for C extension, pure-Python fallback only)
-
-## Documentation
-
-- [GitHub Wiki](https://github.com/KrzysztofDusko/nzpy_extended/wiki)
-- [Issue tracker](https://github.com/KrzysztofDusko/nzpy_extended/issues)
 
 ## Testing
 
