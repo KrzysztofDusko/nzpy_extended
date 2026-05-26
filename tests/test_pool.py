@@ -293,3 +293,48 @@ async def test_pool_max_lifetime_recycles_connection():
         await pool.release(c2)
     finally:
         await pool.close_all()
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(30)
+async def test_pool_release_rollback_open_transaction():
+    TABLE = "test_pool_rollback_tx"
+    pool = NzPool(max_size=2, min_size=0, **POOL_KWARGS)
+    try:
+        c0 = await pool.acquire()
+        cur = c0.cursor()
+        await cur.execute(f"CREATE TABLE {TABLE} (x INT)")
+        await cur.execute(f"INSERT INTO {TABLE} VALUES (0)")
+        await pool.release(c0)
+
+        c1 = await pool.acquire()
+        c1.autocommit = False
+        cur = c1.cursor()
+        await cur.execute(f"INSERT INTO {TABLE} VALUES (99)")
+        assert c1.in_transaction is True
+        await pool.release(c1)
+
+        c2 = await pool.acquire()
+        cur2 = c2.cursor()
+        await cur2.execute(f"SELECT COUNT(*) FROM {TABLE}")
+        row = await cur2.fetchone()
+        assert row[0] == 1
+        await pool.release(c2)
+    finally:
+        c_clean = await pool.acquire()
+        await c_clean.cursor().execute(f"DROP TABLE {TABLE}")
+        await pool.release(c_clean)
+        await pool.close_all()
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(30)
+async def test_pool_close_all_closes_checked_out():
+    pool = NzPool(max_size=2, min_size=0, **POOL_KWARGS)
+    c = await pool.acquire()
+    await pool.close_all()
+
+    from nzpy_extended.core import ConnectionClosedError
+    with pytest.raises((nzpy.InterfaceError, ConnectionClosedError, RuntimeError, OSError)):
+        cur = c.cursor()
+        await cur.execute("SELECT 1")

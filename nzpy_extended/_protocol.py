@@ -67,7 +67,7 @@ from .utils import (
     pg_to_py_encodings,
 )
 from ._serializers import build_pg_types, build_py_types
-from ._dbos import _HAVE_C_EXT, _c_ext
+from . import _cstate
 
 if TYPE_CHECKING:
     from .core import Connection, Cursor
@@ -437,6 +437,15 @@ class ProtocolHandler:
                 )
                 if cursor.ps is not None:
                     cursor.ps["tupdesc"] = conn.tupdesc
+                    if len(cursor.ps.get("row_desc", [])) == 0:
+                        for i in range(conn.tupdesc.numFields):
+                            cursor.ps["row_desc"].append({
+                                "name": b"",
+                                "type_oid": conn.tupdesc.field_type[i],
+                                "type_size": conn.tupdesc.field_size[i],
+                                "type_modifier": -1,
+                                "format": 0,
+                            })
                 yield "ROW_DESCRIPTION"
                 continue
             if response == b"Y":
@@ -451,11 +460,11 @@ class ProtocolHandler:
                     cursor, conn.tupdesc, bytes(data)
                 )
 
-                if _HAVE_C_EXT:  # type: ignore[name-defined]
-                    assert _c_ext is not None  # type: ignore[name-defined]
+                if _cstate._HAVE_C_EXT:
+                    assert _cstate._c_ext is not None
                     view = stream.read_available_view()
                     if view is not None and len(view) > 13:
-                        rows, consumed = _c_ext.process_dbos_batch(  # type: ignore[name-defined]
+                        rows, consumed = _cstate._c_ext.process_dbos_batch(
                             view,
                             conn.tupdesc.field_type,
                             conn.tupdesc.field_size,

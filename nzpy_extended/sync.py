@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import socket
 from typing import Any, Callable, Literal
 
@@ -7,16 +8,34 @@ from typing import Any, Callable, Literal
 from ._runner import runner  # pyright: ignore[reportPrivateUsage]
 from .core import Connection
 
+_log = logging.getLogger(__name__)
+
 
 class SyncCursor:
     def __init__(self, async_cursor: Any) -> None:
         self._c: Any = async_cursor
+        self._timeout: float | None = None
 
-    def execute(self, sql: str, args: Any | None = None) -> None:
-        runner.run(self._c.execute(sql, args))
+    @property
+    def timeout(self) -> float | None:
+        return self._timeout
 
-    def executemany(self, sql: str, seq_of_args: list[Any]) -> None:
+    @timeout.setter
+    def timeout(self, value: float | None) -> None:
+        self._timeout = value
+
+    def execute(self, sql: str, args: Any | None = None, timeout: float | None = None) -> SyncCursor:
+        if timeout is None:
+            timeout = self._timeout
+        runner.run(self._c.execute(sql, args, timeout=timeout))
+        return self
+
+    def executemany(self, sql: str, seq_of_args: list[Any]) -> SyncCursor:
         runner.run(self._c.executemany(sql, seq_of_args))
+        return self
+
+    def callproc(self, procname: str, parameters: list[Any] | None = None) -> list[Any] | None:
+        return runner.run(self._c.callproc(procname, parameters))  # type: ignore[no-any-return]
 
     def fetchone(self) -> Any:
         return runner.run(self._c.fetchone())
@@ -43,6 +62,17 @@ class SyncCursor:
     @property
     def statusmessage(self) -> Any:
         return getattr(self._c, 'statusmessage', None)
+
+    @property
+    def messages(self) -> Any:
+        return self._c.messages
+
+    def get_schema_table(self) -> Any:
+        return self._c.get_schema_table()
+
+    @property
+    def rownumber(self) -> Any:
+        return self._c.rownumber
 
     @property
     def arraysize(self) -> int:
@@ -124,11 +154,43 @@ class _TransactionContext:
 class SyncConnection:
     def __init__(self, async_conn: Connection) -> None:
         self._conn: Connection | None = async_conn
+        self._timeout: float | None = None
+
+    @property
+    def timeout(self) -> float | None:
+        return self._timeout
+
+    @timeout.setter
+    def timeout(self, value: float | None) -> None:
+        self._timeout = value
+
+    @property
+    def autocommit(self) -> bool:
+        if self._conn is None:
+            raise RuntimeError("Connection is closed")
+        return self._conn.autocommit
+
+    @autocommit.setter
+    def autocommit(self, value: bool) -> None:
+        if self._conn is None:
+            raise RuntimeError("Connection is closed")
+        self._conn.autocommit = value
+
+    @property
+    def closed(self) -> bool:
+        return self._conn is None
 
     def cursor(self) -> SyncCursor:
         if self._conn is None:
             raise RuntimeError("Connection is closed")
-        return SyncCursor(self._conn.cursor())
+        c = SyncCursor(self._conn.cursor())
+        c._timeout = self._timeout  # pyright: ignore[reportPrivateUsage]
+        return c
+
+    def execute(self, sql: str, args: Any | None = None, timeout: float | None = None) -> SyncCursor:
+        c = self.cursor()
+        c.execute(sql, args, timeout=timeout)
+        return c
 
     def commit(self) -> None:
         if self._conn is not None:
@@ -141,6 +203,26 @@ class SyncConnection:
     def cancel(self, exec_gen: Any = None) -> None:
         if self._conn is not None:
             runner.run(self._conn.cancel(exec_gen))
+
+    def load_data(self, table_name: str, rows: list[Any], columns: list[tuple[str, str]] | None = None,
+                  delimiter: str = '|', encoding: str = 'LATIN9',
+                  create_if_missing: bool = True, temporary: bool = False,
+                  distribute_on_random: bool = True, logdir: str | None = None,
+                  escape_char: str | None = '\\') -> int:
+        if self._conn is None:
+            raise RuntimeError("Connection is closed")
+        return runner.run(self._conn.load_data(  # type: ignore[no-any-return]
+            table_name=table_name,
+            rows=rows,
+            columns=columns,
+            delimiter=delimiter,
+            encoding=encoding,
+            create_if_missing=create_if_missing,
+            temporary=temporary,
+            distribute_on_random=distribute_on_random,
+            logdir=logdir,
+            escape_char=escape_char,
+        ))
 
     def transaction(self) -> _TransactionContext:
         return _TransactionContext(self)
@@ -163,12 +245,12 @@ class SyncConnection:
                 if usock is not None:
                     try:
                         usock.shutdown(socket.SHUT_RDWR)
-                    except Exception:
-                        pass
+                    except OSError as e:
+                        _log.warning("Socket shutdown error in __del__: %s", e)
                     try:
                         usock.close()
-                    except Exception:
-                        pass
+                    except OSError as e:
+                        _log.warning("Socket close error in __del__: %s", e)
         except Exception:
             pass
 
@@ -296,4 +378,31 @@ def connect(
     return SyncConnection(async_conn)
 
 
-__all__ = ["SyncCursor", "SyncConnection", "connect"]
+def load_data(
+    conn: SyncConnection,
+    table_name: str,
+    rows: list[Any],
+    columns: list[tuple[str, str]] | None = None,
+    delimiter: str = '|',
+    encoding: str = 'LATIN9',
+    create_if_missing: bool = True,
+    temporary: bool = False,
+    distribute_on_random: bool = True,
+    logdir: str | None = None,
+    escape_char: str | None = '\\',
+) -> int:
+    return conn.load_data(
+        table_name=table_name,
+        rows=rows,
+        columns=columns,
+        delimiter=delimiter,
+        encoding=encoding,
+        create_if_missing=create_if_missing,
+        temporary=temporary,
+        distribute_on_random=distribute_on_random,
+        logdir=logdir,
+        escape_char=escape_char,
+    )
+
+
+__all__ = ["SyncCursor", "SyncConnection", "connect", "load_data"]

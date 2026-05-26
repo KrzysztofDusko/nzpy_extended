@@ -20,12 +20,7 @@ from decimal import Decimal
 
 import pytest
 
-try:
-    from nzpy_extended import c_ext as _c_ext
-
-    _HAVE_C_EXT = True
-except ImportError:
-    _HAVE_C_EXT = False
+from nzpy_extended._cstate import _HAVE_C_EXT, _c_ext
 
 pytestmark = [pytest.mark.full, pytest.mark.unit]
 

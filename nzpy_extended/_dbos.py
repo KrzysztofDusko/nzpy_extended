@@ -12,14 +12,15 @@ methods that previously lived on ``Connection``.
 
 from __future__ import annotations
 
-import os
 from datetime import date, datetime as Datetime, time
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
+from . import _cstate
 from .protocol import (
     NzTypeBool,
     NzTypeChar,
+    NzTypeDate,
     NzTypeDouble,
     NzTypeFloat,
     NzTypeGeometry,
@@ -56,26 +57,6 @@ from .utils import h_le_unpack, i_le_unpack, q_le_unpack
 
 if TYPE_CHECKING:
     from .core import Connection, Cursor
-
-
-# ---------------------------------------------------------------------------
-# C-extension detection
-# ---------------------------------------------------------------------------
-_FORCE_PURE_PYTHON = (
-    os.environ.get("NZPY_EXTENDED_NO_CEXT", "").lower() in ("1", "true", "yes")
-)
-
-if _FORCE_PURE_PYTHON:
-    _HAVE_C_EXT: bool = False
-    _c_ext: Any = None
-else:
-    try:
-        from . import c_ext as _c_ext  # type: ignore[attr-defined,no-redef]
-
-        _HAVE_C_EXT = True
-    except ImportError:
-        _HAVE_C_EXT = False
-        _c_ext = None
 
 
 # ---------------------------------------------------------------------------
@@ -140,9 +121,9 @@ class DbosParser:
         """
         conn = self._conn
 
-        if _HAVE_C_EXT:
-            assert _c_ext is not None
-            row = _c_ext.process_dbos_row(  # pyright: ignore[reportUnknownMemberType]
+        if _cstate._HAVE_C_EXT:
+            assert _cstate._c_ext is not None
+            row = _cstate._c_ext.process_dbos_row(  # pyright: ignore[reportUnknownMemberType]
                 data,
                 tupdesc.field_type,
                 tupdesc.field_size,
@@ -260,7 +241,8 @@ class DbosParser:
             elif fldtype == NzTypeInt2:
                 row.append(h_le_unpack(data, offset)[0])
             elif fldtype == NzTypeInt1:
-                row.append(data[offset])
+                val = data[offset]
+                row.append(val - 256 if val > 127 else val)
             elif fldtype == NzTypeDouble:
                 row.append(struct.unpack_from("<d", data, offset)[0])
             elif fldtype == NzTypeFloat:
@@ -315,16 +297,17 @@ class DbosParser:
                     if fldlen >= 8
                     else int.from_bytes(mv[offset: offset + fldlen], "little", signed=True)
                 )
-                ts: tuple[int, int, int, int, int, int, int] = (0, 0, 0, 0, 0, 0, 0)
                 if fldlen == 8:
                     result = timestamp2struct(workspace)
                     if result is not False:
-                        ts = result  # type: ignore[assignment]
-                row.append(
-                    Datetime(
-                        ts[0], ts[1], ts[2], ts[3], ts[4], ts[5], ts[6]
-                    )
-                )
+                        ts: tuple[int, int, int, int, int, int, int] = result  # type: ignore[assignment]
+                        row.append(
+                            Datetime(ts[0], ts[1], ts[2], ts[3], ts[4], ts[5], ts[6])
+                        )
+                    else:
+                        row.append(None)
+                else:
+                    row.append(None)
             elif fldtype == NzTypeNumeric:
                 fsize = tupdesc.field_size[cur_field]
                 scale = fsize & 0x00FF
@@ -347,6 +330,8 @@ class DbosParser:
                 row.append(Decimal(val) * (Decimal(10) ** -scale))
             elif fldtype == NzTypeBool:
                 row.append(data[offset] == 1)
+            else:
+                row.append(None)
 
             cur_field += 1
             field_lf += 1
@@ -396,6 +381,4 @@ class DbosParser:
 
 __all__ = [
     "DbosParser",
-    "_HAVE_C_EXT",
-    "_c_ext",
 ]

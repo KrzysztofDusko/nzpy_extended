@@ -30,9 +30,28 @@ class _SyncRunner:
         atexit.register(self._atexit_cleanup)
 
     def run(self, coro: Coroutine[Any, Any, Any] | asyncio.Future[Any]) -> Any:
-        if not self._loop.is_running():
-            raise RuntimeError("nzpy _SyncRunner event loop is not running")
-        return asyncio.run_coroutine_threadsafe(coro, self._loop).result()  # type: ignore[arg-type]
+        for attempt in range(2):
+            if not self._loop.is_running():
+                self._restart()
+            try:
+                return asyncio.run_coroutine_threadsafe(coro, self._loop).result()  # type: ignore[arg-type]
+            except RuntimeError:
+                if attempt == 0:
+                    continue
+                raise
+
+    def _restart(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
+        self._loop = asyncio.new_event_loop()
+        self._thread = threading.Thread(
+            target=self._loop.run_forever,
+            daemon=True,
+            name="nzpy-sync-runner",
+        )
+        self._thread.start()
 
     def close(self) -> None:
         if not self._loop.is_running():

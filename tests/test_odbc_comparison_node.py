@@ -14,6 +14,8 @@ from odbc_queries_node import QUERIES_NODE
 
 pytestmark = [pytest.mark.full, pytest.mark.odbc_node]
 
+_SHARED_ODBC = None
+
 
 def _skip_nvarchar_linux(sql: str) -> None:
     import sys
@@ -46,27 +48,31 @@ def _skip_known_odbc_gaps(sql: str) -> None:
             pytest.skip("ODBC returns 0 rows for CURRENT_DATE/TIMESTAMP without FROM")
 
 
+def _get_shared_odbc():
+    global _SHARED_ODBC
+    if _SHARED_ODBC is None:
+        _SHARED_ODBC = _odbc_conn()
+    return _SHARED_ODBC
+
+
 @pytest.mark.parametrize("sql", QUERIES_NODE)
 @pytest.mark.asyncio
 @pytest.mark.timeout(600)  # 10 min timeout per query
 async def test_node_query_matches_odbc(sql):
     _skip_nvarchar_linux(sql)
     _skip_known_odbc_gaps(sql)
-    odbc_con = _odbc_conn()
+    odbc_con = _get_shared_odbc()
     nzpy_con = await _nzpy_conn()
+    nz_cur = nzpy_con.cursor()
+    odbc_cur = odbc_con.cursor()
     try:
-        nz_cur = nzpy_con.cursor()
-        odbc_cur = odbc_con.cursor()
-        try:
-            await nz_cur.execute(sql)
-            nz_rows = await nz_cur.fetchall()
-            odbc_cur.execute(sql)
-            from test_odbc_comparison import _odbc_safe_fetchall
-            odbc_rows = _odbc_safe_fetchall(odbc_cur)
-            compare_rows(nz_rows, odbc_rows, sql)
-        finally:
-            await nz_cur.close()
-            odbc_cur.close()
+        await nz_cur.execute(sql)
+        nz_rows = await nz_cur.fetchall()
+        odbc_cur.execute(sql)
+        from test_odbc_comparison import _odbc_safe_fetchall
+        odbc_rows = _odbc_safe_fetchall(odbc_cur)
+        compare_rows(nz_rows, odbc_rows, sql)
     finally:
-        odbc_con.close()
+        await nz_cur.close()
+        odbc_cur.close()
         await nzpy_con.close()

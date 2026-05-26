@@ -31,22 +31,22 @@ _CEXT_ORIGINAL_FLAG = None
 
 @pytest.fixture
 def is_c_extension_available():
-    import nzpy_extended.core as _core
-    return getattr(_core, "_HAVE_C_EXT", False)
+    import nzpy_extended._cstate as _cstate
+    return getattr(_cstate, "_HAVE_C_EXT", False)
 
 
 @pytest.fixture(params=[pytest.param(True, id="C_ext_enabled"), pytest.param(False, id="pure_python")])
 def cext_mode(request, monkeypatch):
-    import nzpy_extended.core as _core
+    import nzpy_extended._cstate as _cstate
 
     global _CEXT_ORIGINAL_FLAG
     if _CEXT_ORIGINAL_FLAG is None:
-        _CEXT_ORIGINAL_FLAG = getattr(_core, "_HAVE_C_EXT", False)
+        _CEXT_ORIGINAL_FLAG = getattr(_cstate, "_HAVE_C_EXT", False)
 
     use_c_ext = request.param
-    monkeypatch.setattr(_core, "_HAVE_C_EXT", use_c_ext)
+    monkeypatch.setattr(_cstate, "_HAVE_C_EXT", use_c_ext)
     yield use_c_ext
-    monkeypatch.setattr(_core, "_HAVE_C_EXT", _CEXT_ORIGINAL_FLAG)
+    monkeypatch.setattr(_cstate, "_HAVE_C_EXT", _CEXT_ORIGINAL_FLAG)
 
 
 # ---------------------------------------------------------------------------
@@ -322,3 +322,77 @@ async def test_processed_table_vs_literal(con_cext, cext_mode):
     assert row_direct[1] == "abc"
     assert abs(row_direct[2] - 3.14) < 0.001
     assert row_direct[3] is True
+
+
+# ---------------------------------------------------------------------------
+# Interval type
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_interval_type(con_cext, cext_mode):
+    row = await _fetch_one(con_cext, "SELECT INTERVAL '2:30:00' HOUR TO SECOND")
+    assert row is not None
+    val = row[0]
+    assert isinstance(val, nzpy.Interval), (
+        f"Expected Interval, got {type(val).__name__} [{cext_mode}]"
+    )
+    assert val.microseconds == 9000000000, (
+        f"Expected 9000000000 µs (2.5 h), got {val.microseconds} [{cext_mode}]"
+    )
+    assert val.months == 0
+    assert val.days == 0
+
+
+# ---------------------------------------------------------------------------
+# VarBinary (BYTEA) type
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_varbinary_type(con_cext, cext_mode):
+    row = await _fetch_one(
+        con_cext, "SELECT CAST('hello' AS BYTEA)"
+    )
+    assert row is not None
+    val = row[0]
+    assert isinstance(val, (str, bytes)), (
+        f"Expected str or bytes, got {type(val).__name__} [{cext_mode}]"
+    )
+
+
+# ---------------------------------------------------------------------------
+# BYTEINT negative boundary (parity-critical: signed vs unsigned)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("val", [-1, -128, 0, 1, 127])
+async def test_byteint_boundary(con_cext, cext_mode, val):
+    row = await _fetch_one(con_cext, f"SELECT {val}::BYTEINT")
+    assert row is not None
+    result = row[0]
+    assert isinstance(result, int), (
+        f"Expected int, got {type(result).__name__} [{cext_mode}]"
+    )
+    assert result == val, (
+        f"Expected {val}, got {result} (signedness check) [{cext_mode}]"
+    )
+
+
+# ---------------------------------------------------------------------------
+# VarFixedChar type
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_varfixedchar_type(con_cext, cext_mode):
+    row = await _fetch_one(con_cext, "SELECT 'fixed'::CHAR(10)")
+    assert row is not None
+    val = row[0]
+    assert isinstance(val, str), (
+        f"Expected str, got {type(val).__name__} [{cext_mode}]"
+    )
+    assert val == "fixed     ", (
+        f"Expected space-padded char, got {val!r} [{cext_mode}]"
+    )

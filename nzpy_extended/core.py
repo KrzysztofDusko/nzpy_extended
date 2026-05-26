@@ -27,19 +27,6 @@ from . import handshake
 from ._constants import DEFAULT_BUFFER_SIZE
 from .buffered_stream import NzBufferedStream
 
-_FORCE_PURE_PYTHON = os.environ.get("NZPY_EXTENDED_NO_CEXT", "").lower() in ("1", "true", "yes")
-
-if _FORCE_PURE_PYTHON:
-    _HAVE_C_EXT = False
-    _c_ext = None
-else:
-    try:
-        from . import c_ext as _c_ext  # type: ignore[attr-defined,no-redef]
-        _HAVE_C_EXT = True
-    except ImportError:
-        _HAVE_C_EXT = False
-        _c_ext = None
-
 from .exceptions import (Warning, Error, InterfaceError,
                          ConnectionClosedError, DatabaseError, DataError,
                          OperationalError, IntegrityError, InternalError,
@@ -362,7 +349,7 @@ class Connection:
 
         async def conn_send_query() -> bool:
 
-            if not await self.execute(self._cursor, "set nz_encoding to "
+            if not await self._execute(self._cursor, "set nz_encoding to "
                                                "'utf8'", None):
                 return False
 
@@ -373,7 +360,7 @@ class Connection:
             else:
                 query = "set DateStyle to 'ISO'"
 
-            if not await self.execute(self._cursor, query, None):
+            if not await self._execute(self._cursor, query, None):
                 return False
 
             client_info = "select version(), 'Netezza Python " \
@@ -385,7 +372,7 @@ class Connection:
                                        platform.system(),
                                        getpass.getuser())
 
-            if not await self.execute(self._cursor, query, None):
+            if not await self._execute(self._cursor, query, None):
                 return False
             else:
                 results = await self._cursor.fetchall()
@@ -395,10 +382,10 @@ class Connection:
 
             client_info = "SET CLIENT_VERSION = '{}'"
             query = client_info.format(nzpy_extended_client_version)
-            if not await self.execute(self._cursor, query, None):
+            if not await self._execute(self._cursor, query, None):
                 return False
 
-            if not await self.execute(self._cursor, "select ascii(' ') as space, "
+            if not await self._execute(self._cursor, "select ascii(' ') as space, "
                                                "encoding as ccsid "
                                                "from _v_database "
                                                "where objid = current_db",
@@ -409,7 +396,7 @@ class Connection:
                 for c1, c2 in results:
                     self.log.debug("c1 = %s, c2 = %s" % (c1, c2))
 
-            if not await self.execute(self._cursor, "select feature from "
+            if not await self._execute(self._cursor, "select feature from "
                                                "_v_odbc_feature "
                                                "where spec_level = '3.5'",
                                   None):
@@ -419,7 +406,7 @@ class Connection:
                 for c1 in results:
                     self.log.debug("c1 = %s" % (c1))
 
-            if not await self.execute(self._cursor, "select identifier_case, "
+            if not await self._execute(self._cursor, "select identifier_case, "
                                                "current_catalog, "
                                                "current_user", None):
                 return False
@@ -450,13 +437,18 @@ class Connection:
     def cursor(self) -> Cursor:
         return Cursor(self)
 
+    async def execute(self, operation: str, args: Any | None = None, timeout: float | None = None) -> Cursor:
+        c = self.cursor()
+        await c.execute(operation, args, timeout=timeout)
+        return c
+
     async def commit(self) -> None:
-        await self.execute(self._cursor, "commit", None)
+        await self._execute(self._cursor, "commit", None)
 
     async def rollback(self) -> None:
         if not self.in_transaction:
             return
-        await self.execute(self._cursor, "rollback", None)
+        await self._execute(self._cursor, "rollback", None)
 
     async def close(self) -> None:
         if getattr(self, '_usock', None) is None:
@@ -466,12 +458,12 @@ class Connection:
             if getattr(self, '_usock', None) is not None:
                 try:
                     self._usock.shutdown(socket.SHUT_RDWR)
-                except Exception:
-                    pass
+                except OSError as e:
+                    self.log.warning("Socket shutdown error during close: %s", e)
                 try:
                     self._usock.close()
-                except Exception:
-                    pass
+                except OSError as e:
+                    self.log.warning("Socket close error during close: %s", e)
                 self._usock = None
         except Exception:
             pass
@@ -479,8 +471,8 @@ class Connection:
         if hasattr(self, '_stream') and self._stream is not None:
             try:
                 self._stream.close()
-            except Exception:
-                pass
+            except OSError as e:
+                self.log.warning("Stream close error during close: %s", e)
             self._stream = None
 
         self.sock = None
@@ -652,7 +644,7 @@ class Connection:
         finally:
             self._active_generator = None
 
-    async def execute(self, cursor: Cursor, query: str, vals: Any) -> str | None:
+    async def _execute(self, cursor: Cursor, query: str, vals: Any) -> str | None:
         active_gen = getattr(self, '_active_generator', None)
         if active_gen is not None:
             old_cursor = getattr(self, '_active_cursor', None)
@@ -835,6 +827,16 @@ class Connection:
                 return str(ar).translate(arr_trans).encode('ascii')
 
         return (array_oid, fc, send_array_binary if fc == FC_BINARY else send_array_text)
+
+
+def __getattr__(name: str) -> Any:
+    """Dynamic re-exports for C extension state so that monkeypatching
+    ``_cstate._HAVE_C_EXT`` is always reflected here.
+    """
+    if name in ("_HAVE_C_EXT", "_c_ext"):
+        from . import _cstate
+        return getattr(_cstate, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 __all__ = [

@@ -10,7 +10,7 @@ if root_dir not in sys.path:
     sys.path.insert(0, root_dir)
 
 import nzpy_extended
-from nzpy_extended import core as nzpy_core
+from nzpy_extended import _cstate as nzpy_cstate
 
 # Official nzpy is required for comparison
 import nzpy
@@ -361,7 +361,7 @@ async def _run_sync_driver(label, connect_fn, query, results_dict):
         conn = connect_fn()
         ct = time.perf_counter() - start_conn
         flags = []
-        if not nzpy_core._HAVE_C_EXT:
+        if not nzpy_cstate._HAVE_C_EXT:
             flags.append("C ext disabled")
         tag = f" ({', '.join(flags)})" if flags else ""
         out(f"  {label}: Connected in {ct:.4f}s{tag}")
@@ -380,7 +380,7 @@ async def _run_async_driver_extended(label, query, results_dict):
         )
         ct = time.perf_counter() - start_conn
         flags = []
-        if not nzpy_core._HAVE_C_EXT:
+        if not nzpy_cstate._HAVE_C_EXT:
             flags.append("C ext disabled")
         tag = f" ({', '.join(flags)})" if flags else ""
         out(f"  {label}: Connected in {ct:.4f}s{tag}")
@@ -439,16 +439,16 @@ async def run_single_type(type_name, query):
     )
 
     # nzpy_extended async (pure Python, no C extension)
-    original_cext = nzpy_core._HAVE_C_EXT
-    nzpy_core._HAVE_C_EXT = False
+    original_cext = nzpy_cstate._HAVE_C_EXT
+    nzpy_cstate._HAVE_C_EXT = False
     try:
         await _run_async_driver_extended("nzpy_extended_async_nocext", query, results)
     finally:
-        nzpy_core._HAVE_C_EXT = original_cext
+        nzpy_cstate._HAVE_C_EXT = original_cext
 
     # nzpy_extended sync (pure Python, no C extension)
-    original_cext = nzpy_core._HAVE_C_EXT
-    nzpy_core._HAVE_C_EXT = False
+    original_cext = nzpy_cstate._HAVE_C_EXT
+    nzpy_cstate._HAVE_C_EXT = False
     try:
         await _run_sync_driver(
             "nzpy_extended_sync_nocext",
@@ -459,7 +459,7 @@ async def run_single_type(type_name, query):
             results,
         )
     finally:
-        nzpy_core._HAVE_C_EXT = original_cext
+        nzpy_cstate._HAVE_C_EXT = original_cext
 
     return results
 

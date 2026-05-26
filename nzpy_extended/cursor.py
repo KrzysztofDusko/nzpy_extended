@@ -16,13 +16,14 @@ class Cursor:
 
     def __init__(self, connection: Connection) -> None:
         self._c: Connection | None = connection
-        self.arraysize = 1
+        self.arraysize = 100
         self.ps: dict[str, Any] | None = None
         self.row_count = -1
         self.cached_rows: deque[Any] = deque()
         self.notices: deque[Any] = deque()
         self.generator: Any = None
         self.has_rows = False
+        self._rownumber = 0
         self.stream: Any = None
         self._timeout: float | None = None
         self._exec_gen: int | None = None
@@ -37,6 +38,14 @@ class Cursor:
     def connection(self) -> Connection | None:
         warn("DB-API extension cursor.connection used", stacklevel=3)
         return self._c
+
+    @property
+    def messages(self) -> deque[Any]:
+        return self.notices
+
+    @property
+    def rownumber(self) -> int:
+        return self._rownumber
 
     @property
     def rowcount(self) -> int:
@@ -112,13 +121,13 @@ class Cursor:
             await self.clear()
 
             if self._c is not None and not self._c.in_transaction and not self._c.autocommit:
-                await self._c.execute(self, "begin", None)
+                await self._c._execute(self, "begin", None)
                 self._c.in_transaction = True
 
             if self._c is not None:
                 exec_gen = self._c.command_generation + 1
                 self._exec_gen = exec_gen
-                coro = self._c.execute(self, operation, args)
+                coro = self._c._execute(self, operation, args)
                 if timeout is not None and timeout > 0:
                     try:
                         await asyncio.wait_for(coro, timeout=timeout)
@@ -140,12 +149,28 @@ class Cursor:
     async def executemany(self, operation: str, param_sets: list[Any]) -> Cursor:
         await self.clear()
         rowcounts: list[int] = []
-        for parameters in param_sets:
-            await self.execute(operation, parameters)
+        for i, parameters in enumerate(param_sets):
+            try:
+                await self.execute(operation, parameters)
+            except Exception as e:
+                self.row_count = -1 if -1 in rowcounts else sum(rowcounts)
+                raise ProgrammingError(
+                    f"executemany failed at param set {i + 1}/{len(param_sets)}: {e}"
+                ) from e
             rowcounts.append(self.row_count)
 
         self.row_count = -1 if -1 in rowcounts else sum(rowcounts)
         return self
+
+    async def callproc(self, procname: str, parameters: list[Any] | None = None) -> list[Any] | None:
+        if parameters:
+            placeholders = ', '.join(['?'] * len(parameters))
+            sql = f"CALL {procname}({placeholders})"
+            await self.execute(sql, parameters)
+            return list(parameters)
+        sql = f"CALL {procname}()"
+        await self.execute(sql)
+        return None
 
     async def fetchone(self) -> Any:
         try:
@@ -180,9 +205,11 @@ class Cursor:
                 return []
             rows = list(self.cached_rows)
             self.cached_rows.clear()
+            self._rownumber += len(rows)
             async for state in generator:
                 if state in ("DATA_ROW", "DATA_BATCH"):
                     rows.extend(self.cached_rows)
+                    self._rownumber += len(self.cached_rows)
                     self.cached_rows.clear()
                 elif state == "COMMAND_COMPLETE":
                     self.has_rows = len(rows) > 0
@@ -234,13 +261,15 @@ class Cursor:
     async def __anext__(self) -> Any:
         if getattr(self, '_timeout', None) is not None and self._timeout and self._timeout > 0:
             try:
-                return list(await asyncio.wait_for(self._anext_internal(), timeout=self._timeout))
+                row = await asyncio.wait_for(self._anext_internal(), timeout=self._timeout)
             except asyncio.TimeoutError:
                 if self._c is not None:
                     await self._c.cancel(exec_gen=getattr(self, '_exec_gen', None))
                 raise OperationalError("Command fetch timeout")
         else:
-            return list(await self._anext_internal())
+            row = await self._anext_internal()
+        self._rownumber += 1
+        return list(row)
 
     async def _anext_internal(self) -> Any:
         try:
@@ -295,6 +324,7 @@ class Cursor:
         self.row_count = -1
         self.has_rows = False
         self.cached_rows.clear()
+        self._rownumber = 0
 
     async def nextset(self) -> bool | None:
         self.cached_rows.clear()

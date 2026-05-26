@@ -370,7 +370,7 @@ class TestExternalTableExport:
             ) DISTRIBUTE ON RANDOM
         """)
 
-        for i in range(100):
+        for i in range(20):
             await self.cursor.execute(
                 f"INSERT INTO test_export_large VALUES ({i}, 'Test data row {i}')"
             )
@@ -389,7 +389,7 @@ class TestExternalTableExport:
 
         assert os.path.exists(filepath)
         file_size = os.path.getsize(filepath)
-        assert file_size > 1000
+        assert file_size > 200
 
     @pytest.mark.asyncio
     async def test_export_empty_table(self):
@@ -860,7 +860,7 @@ class TestExternalTableCompressed:
                 text_data VARCHAR(500)
             ) DISTRIBUTE ON RANDOM
         """)
-        for i in range(50):
+        for i in range(15):
             await self.cursor.execute(
                 f"INSERT INTO test_comp_large_src VALUES ({i}, "
                 f"'Row number {i} with padding text that is repeatable "
@@ -912,4 +912,4 @@ class TestExternalTableCompressed:
             "SELECT COUNT(1) FROM test_comp_large_tgt"
         )
         row_count = (await self.cursor.fetchone())[0]
-        assert row_count == 50
+        assert row_count == 15

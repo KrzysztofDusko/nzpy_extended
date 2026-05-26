@@ -75,7 +75,7 @@ class NzPool:
         self._created = 0
         self._cond = asyncio.Condition()
         self._closed = False
-        self._checked_out: set[int] = set()
+        self._checked_out: dict[int, Connection] = {}
         self._log = logging.getLogger("nzpy_extended.NzPool")
         self._maintain_task: asyncio.Task[None] | None = None
 
@@ -111,7 +111,7 @@ class NzPool:
             try:
                 cursor = pc.conn.cursor()
                 await asyncio.wait_for(
-                    pc.conn.execute(cursor, self.ping_query, None),
+                    pc.conn._execute(cursor, self.ping_query, None),
                     timeout=10.0
                 )
                 await cursor.fetchall()
@@ -193,7 +193,7 @@ class NzPool:
                         _ = time.monotonic()
                         self._created += 1
                         conn._nzpy_pool_uses = 1  # type: ignore[attr-defined]
-                        self._checked_out.add(id(conn))
+                        self._checked_out[id(conn)] = conn
                         return conn
                     except Exception:
                         raise
@@ -218,7 +218,7 @@ class NzPool:
                 async with self._cond:
                     pc.use_count += 1
                     pc.conn._nzpy_pool_uses = pc.use_count  # type: ignore[attr-defined]
-                    self._checked_out.add(id(pc.conn))
+                    self._checked_out[id(pc.conn)] = pc.conn
                 return pc.conn
             else:
                 await self._close_connection(pc)
@@ -228,6 +228,12 @@ class NzPool:
     async def release(self, conn: Connection) -> None:
         conn_id = id(conn)
 
+        if not conn.autocommit and conn.in_transaction:
+            try:
+                await conn.rollback()
+            except Exception:
+                pass
+
         async with self._cond:
             if self._closed:
                 await conn.close()
@@ -236,7 +242,7 @@ class NzPool:
                 raise RuntimeError(
                     "Connection was not acquired from this pool or has already been released."
                 )
-            self._checked_out.discard(conn_id)
+            self._checked_out.pop(conn_id)
 
             now = time.monotonic()
             created = getattr(conn, '_nzpy_pool_created', now)
@@ -263,6 +269,11 @@ class NzPool:
                 pc = self._pool.popleft()
                 await self._close_connection(pc)
             self._created = 0
+            for conn in self._checked_out.values():
+                try:
+                    await conn.close()
+                except Exception:
+                    pass
             self._checked_out.clear()
             self._cond.notify_all()
 
@@ -307,7 +318,7 @@ class SyncPool:
         self._checked_out: set[int] = set()
         self._checked_out_pc: dict[int, _SyncPooledConnection] = {}
         self._closed = False
-        self._maintain_active = True
+        self._stop_event = threading.Event()
         self._maintain_thread = threading.Thread(
             target=self._maintain_loop, daemon=True
         )
@@ -351,14 +362,11 @@ class SyncPool:
         return True
 
     def _maintain_loop(self) -> None:
-        while self._maintain_active:
-            time.sleep(30)
-            if not self._maintain_active or self._closed:
-                break
-            stale: list[_SyncPooledConnection] = []
+        while not self._stop_event.wait(30.0):
             with self._lock:
                 if self._closed:
                     break
+                stale: list[_SyncPooledConnection] = []
                 for pc in list(self._pool):
                     if not self._validate_connection(pc):
                         stale.append(pc)
@@ -428,6 +436,12 @@ class SyncPool:
                     if self._created > 0:
                         self._created -= 1
             else:
+                async_conn = getattr(conn, '_conn', None)
+                if async_conn is not None and not async_conn.autocommit and async_conn.in_transaction:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
                 pc.last_used = time.monotonic()
                 self._pool.append(pc)
         self._sem.release()
@@ -453,7 +467,7 @@ class SyncPool:
             }
 
     def close_all(self) -> None:
-        self._maintain_active = False
+        self._stop_event.set()
         with self._lock:
             self._closed = True
             while self._pool:
@@ -463,6 +477,11 @@ class SyncPool:
                 except Exception:
                     pass
             self._created = 0
+            for conn_id, pc in list(self._checked_out_pc.items()):
+                try:
+                    pc.conn.close()
+                except Exception:
+                    pass
             self._checked_out.clear()
             self._checked_out_pc.clear()
             for _ in range(self.max_size):
@@ -470,6 +489,10 @@ class SyncPool:
                     self._sem.release()
                 except ValueError:
                     pass
+        try:
+            self._maintain_thread.join(timeout=2.0)
+        except Exception:
+            pass
 
     def __enter__(self) -> SyncPool:
         return self

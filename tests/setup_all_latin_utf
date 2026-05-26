@@ -1,2 +1,0 @@
-nzsql -d nzpy_test -c "CREATE TABLE all_utfLatin_datatypes ( a_srno int, a_char10 char(10), a_char1000 char(1000), a_varchar10 varchar(10), a_nchar10 nchar(10), a_nchar1000 nchar(1000), a_nvarchar10 nvarchar(10))"
-nzsql -d nzpy_test -c "insert into all_utfLatin_datatypes values (1,'àë        ','©¡ùâûôÞçå¶ý§ë¡êÆù×Òþ®²¬óßöÅè§ýÙåèáÓ¥ë³àûñ¥²ïú',' ì«¹Ü','î·®ð£','ó´<9a><90>ð£¨°ð¥»<85>ô<8a>°¦ð¨<88>¾ó·¿<90>óµ¿¡ô<85><8c>«ð<9d><9b>»ô<8c>³<81>ê<8b>ªð <89>¨ô<8b><82><93>ô<8c>½<9a>æ¢<8b>è°<9c>ô<','å')"

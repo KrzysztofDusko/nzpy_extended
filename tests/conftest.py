@@ -84,27 +84,27 @@ def cext_mode(request, monkeypatch):
     Fixture parametrizing C extension usage.
 
     Yields bool indicating whether C extension should be used.
-    When ``False``, monkeypatches ``nzpy_extended.core._HAVE_C_EXT``
+    When ``False``, monkeypatches ``nzpy_extended._cstate._HAVE_C_EXT``
     so that DBOS payload processing falls back to pure Python.
     """
-    import nzpy_extended.core as _core
+    import nzpy_extended._cstate as _cstate
 
     use_c_ext = request.param
 
     # Global cache so the second parametrized run retains the original flag
     global _CEXT_ORIGINAL_FLAG
     if _CEXT_ORIGINAL_FLAG is None:
-        _CEXT_ORIGINAL_FLAG = getattr(_core, "_HAVE_C_EXT", False)
+        _CEXT_ORIGINAL_FLAG = getattr(_cstate, "_HAVE_C_EXT", False)
 
     if use_c_ext:
-        monkeypatch.setattr(_core, "_HAVE_C_EXT", True)
+        monkeypatch.setattr(_cstate, "_HAVE_C_EXT", True)
     else:
-        monkeypatch.setattr(_core, "_HAVE_C_EXT", False)
+        monkeypatch.setattr(_cstate, "_HAVE_C_EXT", False)
 
     yield use_c_ext
 
     # Restore original after test
-    monkeypatch.setattr(_core, "_HAVE_C_EXT", _CEXT_ORIGINAL_FLAG)
+    monkeypatch.setattr(_cstate, "_HAVE_C_EXT", _CEXT_ORIGINAL_FLAG)
 
 
 @pytest.fixture
