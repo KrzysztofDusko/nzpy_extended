@@ -49,6 +49,7 @@ async def connect(
     logLevel: int = 0,
     tcp_keepalive: bool = True,
     char_varchar_encoding: str = 'latin',
+    client_encoding: str = 'utf8',
     logOptions: LogOptions = LogOptions.Inherit,
     pgOptions: str | None = None,
     on_connect: Callable[[Connection], Any] | None = None,
@@ -61,7 +62,8 @@ async def connect(
                       securityLevel, timeout, application_name,
                       max_prepared_statements, datestyle, logLevel,
                       tcp_keepalive, char_varchar_encoding,
-                      logOptions, pgOptions, ssl_verify=ssl_verify,
+                      logOptions, client_encoding,
+                      pgOptions, ssl_verify=ssl_verify,
                       connect_timeout=connect_timeout,
                       buffer_size=buffer_size)
     if on_connect is not None:

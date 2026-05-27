@@ -55,8 +55,10 @@ If the compiled extension is not available (unsupported platform or Python versi
 
 ## Installation
 
+The package is available on [PyPI](https://pypi.org/project/nzpy-extended/):
+
 ```shell
-pip install nzpy_extended
+pip install nzpy-extended
 ```
 
 Pre-built wheels are provided for:

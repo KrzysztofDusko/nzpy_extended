@@ -12,7 +12,8 @@ from typing import Any
 
 from .exceptions import InterfaceError
 from .protocol import (NULL_BYTE, ERROR_RESPONSE, AUTHENTICATION_REQUEST,
-                       NOTICE_RESPONSE, BACKEND_KEY_DATA, READY_FOR_QUERY)
+                       NOTICE_RESPONSE, BACKEND_KEY_DATA, READY_FOR_QUERY,
+                       PARAMETER_STATUS)
 from .utils import h_pack, i_pack, i_unpack
 
 CP_VERSION_1 = 1
@@ -77,6 +78,7 @@ class SyncHandshake:
         self.log: logging.Logger = log
         self.backend_pid: int | None = None
         self.backend_key: int | None = None
+        self.server_client_encoding: str | None = None
 
         self.guardium_clientOS: str = system()
         self.guardium_clientOSUser: str = getuser()
@@ -563,6 +565,16 @@ class SyncHandshake:
 
                 self.backend_key = i_unpack(self._read(4))[0]
                 self.log.debug("Backend response KEY: %s", self.backend_key)
+
+            if response == PARAMETER_STATUS:
+                data = self._read(length)
+                pos = data.find(NULL_BYTE)
+                if pos >= 0:
+                    key = data[:pos]
+                    value = data[pos + 1:-1]
+                    if key == b"client_encoding":
+                        self.server_client_encoding = value.decode("ascii").lower()
+                    self.log.debug("ParameterStatus: %s = %s", key, value)
 
             if response == READY_FOR_QUERY:
                 self.log.info("Authentication Successful")

@@ -25,6 +25,7 @@ _CONNECT_DEFAULTS: dict[str, Any] = {
     'logLevel': 0,
     'tcp_keepalive': True,
     'char_varchar_encoding': 'latin',
+    'client_encoding': 'utf8',
 }
 
 

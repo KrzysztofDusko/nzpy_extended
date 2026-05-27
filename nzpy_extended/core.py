@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import os
 import tempfile
-import datetime
 import getpass
 import logging
 import logging.handlers
@@ -12,13 +10,10 @@ import asyncio
 from collections import deque
 from collections.abc import Callable
 from copy import deepcopy
-from datetime import (date, datetime as Datetime, time, timedelta as Timedelta)
-from decimal import Decimal
+from datetime import (datetime as Datetime)
 
-from os import path
 
 from typing import Any
-from uuid import UUID
 from warnings import warn
 
 import nzpy_extended
@@ -41,9 +36,7 @@ from .types import (BINARY, Binary, Date, Time, Timestamp,
                     PGType, PGEnum, PGJson, PGJsonb, PGText, PGTsvector,
                     PGVarchar,
                     FC_BINARY,
-                    null_send,
-                    timetz_out_timetzadt,
-                    timestamp2struct)
+                    null_send)
 
 from .protocol import (
     CONN_EXECUTING,
@@ -68,6 +61,7 @@ from .utils import (
     pg_array_types,
     infer_columns_from_rows,
     rows_to_csv_bytes,
+    pg_to_py_encodings,
 )
 
 arr_trans = dict(zip(map(ord, "[] 'u"), list('{}') + [None] * 3))
@@ -199,6 +193,7 @@ class Connection:
             securityLevel: int, timeout: float | None, application_name: str | None,
             max_prepared_statements: int, datestyle: str, logLevel: int, tcp_keepalive: bool,
             char_varchar_encoding: str, logOptions: LogOptions = LogOptions.Inherit,
+            client_encoding: str = "utf8",
             pgOptions: str | None = None, ssl_verify: bool = True,
             connect_timeout: float | None = None,
             buffer_size: int = DEFAULT_BUFFER_SIZE) -> None:
@@ -336,6 +331,12 @@ class Connection:
         self._backend_key_data = None
         self._dirty_socket = False
 
+        if hs.server_client_encoding is not None:
+            encoding_lower = hs.server_client_encoding
+        else:
+            encoding_lower = client_encoding.lower()
+        self._client_encoding = pg_to_py_encodings.get(encoding_lower, encoding_lower)
+
         from ._serializers import build_pg_types, build_py_types
 
         self.pg_types = build_pg_types(self._client_encoding)
@@ -352,7 +353,7 @@ class Connection:
         async def conn_send_query() -> bool:
 
             if not await self._execute(self._cursor, "set nz_encoding to "
-                                               "'utf8'", None):
+                                               f"'{client_encoding}'", None):
                 return False
 
             if datestyle == 'MDY':
