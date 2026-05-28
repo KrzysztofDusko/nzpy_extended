@@ -1,6 +1,7 @@
 import asyncio
 import inspect
 import types
+from collections import deque
 
 import pytest
 
@@ -233,6 +234,49 @@ def test_error_response_mapping():
 
     import asyncio
     asyncio.run(run())
+
+
+@pytest.mark.asyncio
+async def test_notification_response_generator_consumes_payload():
+    conn = Connection()
+    conn._stream = object()
+    conn._client_encoding = "utf8"
+    conn.notifications = deque(maxlen=100)
+    conn.log = core_mod.logging.getLogger("test")
+    conn._dirty_socket = True
+    conn._active_generator = None
+    conn._active_cursor = None
+
+    notification = i_pack_mod(1234) + b"test_channel\x00payload\x00"
+    chunks = deque([
+        b"A0000",
+        i_pack_mod(len(notification)),
+        notification,
+        b"Z0000",
+    ])
+    reads = []
+
+    async def mock_read(n):
+        chunk = chunks.popleft()
+        reads.append((n, chunk))
+        assert len(chunk) == n
+        return chunk
+
+    conn._read = mock_read
+    cursor = conn.cursor()
+
+    states = []
+    async for state in conn._protocol._connNextResultSetGenerator(cursor):
+        states.append(state)
+
+    assert states == ["READY_FOR_QUERY"]
+    assert list(conn.notifications) == [(1234, "test_channel")]
+    assert reads == [
+        (5, b"A0000"),
+        (4, i_pack_mod(len(notification))),
+        (len(notification), notification),
+        (5, b"Z0000"),
+    ]
 
 
 def test_receiveAndWriteDatatoExternal_skips_write_when_fh_is_none():

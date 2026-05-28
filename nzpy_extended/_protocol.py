@@ -288,7 +288,7 @@ class ProtocolHandler:
 
         if key == b"client_encoding":
             encoding = value.decode("ascii").lower()
-            conn._client_encoding = pg_to_py_encodings.get(encoding, encoding)  # type: ignore[assignment]
+            conn._client_encoding = pg_to_py_encodings.get(encoding) or encoding
             conn._char_varchar_encoding = conn._client_encoding
 
         elif key == b"integer_datetimes":
@@ -398,9 +398,16 @@ class ProtocolHandler:
                 yield "READY_FOR_QUERY"
                 return
             if response == b"0":
-                pass
+                length = i_unpack(await conn._read(4))[0]
+                await conn._read(length)
+                conn.log.debug("Unknown response code '0' received from backend")
+                continue
             if response == b"A":
-                pass
+                length = i_unpack(await conn._read(4))[0]
+                data = await conn._read(length)
+                await self.handle_NOTIFICATION_RESPONSE(data, cursor)
+                conn.log.debug("Notification received from backend")
+                continue
             if response == b"P":
                 length = i_unpack(await conn._read(4))[0]
                 conn.log.debug(

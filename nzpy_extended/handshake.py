@@ -79,6 +79,7 @@ class SyncHandshake:
         self.backend_pid: int | None = None
         self.backend_key: int | None = None
         self.server_client_encoding: str | None = None
+        self.last_error: str = ""
 
         self.guardium_clientOS: str = system()
         self.guardium_clientOSUser: str = getuser()
@@ -583,6 +584,7 @@ class SyncHandshake:
             if response == ERROR_RESPONSE:
                 error = str(self._read(length), 'utf8')
                 self.log.warning("Error occured, server response:%s", error)
+                self.last_error = error
                 return False
 
 

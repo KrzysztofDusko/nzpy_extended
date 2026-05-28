@@ -6,7 +6,7 @@
 
 | Feature | nzpy (IBM) | nzpy_extended |
 |---|---|---|
-| Row parsing performance (mixed types) | ~10 000 rows/s | ~63 000 rows/s (no C ext) → **~93 000 rows/s** (+ C ext) |
+| Row parsing performance (mixed types, macOS) | ~10 000 rows/s | ~63 000 rows/s (no C ext) → **~93 000 rows/s** (+ C ext) |
 | Supported Python | 3.5+ | **3.12, 3.13, 3.14** |
 | Platform wheels | ❌ None | ✅ Linux x64, macOS ARM, Windows x64 (pre-built) |
 | Async support | ❌ | ✅ Fully async API |

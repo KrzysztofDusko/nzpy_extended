@@ -7,7 +7,7 @@ import logging.handlers
 import platform
 import socket
 import asyncio
-from collections import deque
+from collections import defaultdict, deque
 from collections.abc import Callable
 from copy import deepcopy
 from datetime import (datetime as Datetime)
@@ -305,7 +305,8 @@ class Connection:
             hs.startup, database, securityLevel,
             user, password, pgOptions)
         if self._usock is False:
-            raise ProgrammingError("Error in handshake")
+            msg:str = hs.last_error or "Error in handshake"
+            raise ProgrammingError(msg)
         self._backend_pid = hs.backend_pid
         self._backend_key = hs.backend_key
         self._usock.setblocking(False)
@@ -335,7 +336,7 @@ class Connection:
             encoding_lower = hs.server_client_encoding
         else:
             encoding_lower = client_encoding.lower()
-        self._client_encoding = pg_to_py_encodings.get(encoding_lower, encoding_lower)
+        self._client_encoding = pg_to_py_encodings.get(encoding_lower) or encoding_lower
 
         from ._serializers import build_pg_types, build_py_types
 
