@@ -1,4 +1,5 @@
 from __future__ import annotations
+from collections.abc import Iterable, AsyncIterable
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -8,7 +9,7 @@ if TYPE_CHECKING:
 async def load_data(
     conn: Connection,
     table_name: str,
-    rows: list[Any],
+    rows: Iterable[Any] | AsyncIterable[Any],
     columns: list[tuple[str, str]] | None = None,
     delimiter: str = '|',
     encoding: str = 'LATIN9',

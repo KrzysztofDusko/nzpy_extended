@@ -10,6 +10,7 @@
 | Supported Python | 3.5+ | **3.12, 3.13, 3.14** |
 | Platform wheels | ❌ None | ✅ Linux x64, macOS ARM, Windows x64 (pre-built) |
 | Async support | ❌ | ✅ Fully async API |
+| Streaming bulk loading | ❌ | ✅ `load_data()` accepts sync and async iterables; `load_csv()` streams local CSV files |
 | Sync API (DB-API 2.0) | ✅ | ✅ Full feature parity with async |
 
 ### Windows 11
@@ -232,7 +233,7 @@ pool.close_all()
 
 ### Bulk data loading via external table protocol
 
-`load_data()` inserts rows from a Python iterable into a Netezza table using the native external table protocol (`REMOTESOURCE 'python'`). It supports optional automatic table creation.
+`load_data()` inserts rows from a Python iterable or async iterable into a Netezza table using the native external table protocol (`REMOTESOURCE 'python'`). It supports optional automatic table creation. Lists and tuples are materialized as CSV bytes; generators, async generators, and other iterables are streamed to Netezza in chunks.
 
 ```python
 # --- Sync ---
@@ -242,6 +243,7 @@ count = conn.load_data("my_table", [(1, "Alice"), (2, "Bob")])
 
 # --- Async ---
 import nzpy_extended as nzpy
+conn = await nzpy.connect(...)
 count = await nzpy.load_data(conn, "my_table", [(1, "Alice"), (2, "Bob")])
 
 # --- Auto-infer types from data ---
@@ -261,6 +263,12 @@ def generate_rows(n):
     for i in range(n):
         yield (i, f"item_{i}")
 count = conn.load_data("my_table", rows=generate_rows(50000))
+
+# --- Async generator for streaming ---
+async def generate_rows_async(n):
+    for i in range(n):
+        yield (i, f"item_{i}")
+count = await nzpy.load_data(conn, "my_table", rows=generate_rows_async(50000))
 ```
 
 **Parameters:**
@@ -277,7 +285,36 @@ count = conn.load_data("my_table", rows=generate_rows(50000))
 | `logdir` | temp dir | Netezza log directory |
 | `escape_char` | `'\\'` | Escape character for delimiter within values |
 
-**Auto-infer column types:** When `columns` is `None` and `create_if_missing=True`, the driver reads the first row and maps Python types to Netezza DDL: `int` → `SMALLINT`/`INT`/`BIGINT`, `float` → `FLOAT`, `str` → `VARCHAR(255)`, `Decimal` → `NUMERIC(p,s)`, `bool` → `BOOLEAN`, `date` → `DATE`, `datetime` → `TIMESTAMP`, `bytes` → `BYTEA`. Column names default to `col1`, `col2`, etc.
+### Streaming CSV import via `load_csv()`
+
+`load_csv()` streams a local CSV file directly into a Netezza table without loading the whole file into memory. It inspects a sample of rows to infer column types when `create_if_missing=True`, then uses the external table protocol to load the remaining data.
+
+```python
+# --- Sync ---
+import nzpy_extended.sync as nzpy
+conn = nzpy.connect(...)
+count = conn.load_csv("my_table", "C:/data/input.csv",
+                      delimiter=',', has_header=True, encoding='UTF8')
+
+# --- Async ---
+import nzpy_extended as nzpy
+conn = await nzpy.connect(...)
+count = await nzpy.load_csv(conn, "my_table", "data/input.csv",
+                            delimiter=',', has_header=True, encoding='UTF8')
+```
+
+| Parameter | Default | Description |
+|---|---|---|
+| `conn` / `table_name` / `csv_path` | (required) | Connection, target table, path to local CSV |
+| `delimiter` | `','` | Field delimiter |
+| `has_header` | `True` | Use first row as column names when inferring schema |
+| `sample_size` | `1000` | Rows read for type inference |
+| `encoding` | `'UTF8'` | File encoding |
+| `create_if_missing` | `True` | Auto-create table from inferred types |
+| `temporary` | `False` | Create TEMP TABLE |
+| `distribute_on_random` | `True` | Add `DISTRIBUTE ON RANDOM` |
+| `escape_char` | `'\\'` | Escape character for delimiter within values |
+| `logdir` | temp dir | Netezza log directory |
 
 ### Metadata API (catalog introspection)
 

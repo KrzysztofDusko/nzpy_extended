@@ -16,6 +16,7 @@ from nzpy_extended.core import (ArrayContentNotHomogenousError,
                        PGText, PGTsvector, PGVarchar, ProgrammingError,
                        Time, TimeFromTicks, Timestamp, TimestampFromTicks,
                        Warning, load_data)
+from nzpy_extended.csv_import import load_csv as load_csv
 from nzpy_extended.pool import AsyncNullPool, NullPool, NzPool, SyncPool
 from nzpy_extended._metadata_api import ConnectionMetadataProvider
 
@@ -98,7 +99,7 @@ __all__ = [
     "Timestamp", "TimestampFromTicks", "BINARY", "Interval", "PGEnum", "PGJson", "PGJsonb",
     "PGTsvector", "PGText", "PGVarchar",
     "NzPool", "SyncPool", "NullPool", "AsyncNullPool",
-    "sync", "load_data",
+    "sync", "load_data", "load_csv",
     "ConnectionMetadataProvider",
     "DEFAULT_BUFFER_SIZE",
 ]

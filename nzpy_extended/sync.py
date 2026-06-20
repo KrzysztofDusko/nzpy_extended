@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import socket
+from collections.abc import Iterable, AsyncIterable
 from typing import Any, Callable, Literal
 
 
@@ -204,7 +205,7 @@ class SyncConnection:
         if self._conn is not None:
             runner.run(self._conn.cancel(exec_gen))
 
-    def load_data(self, table_name: str, rows: list[Any], columns: list[tuple[str, str]] | None = None,
+    def load_data(self, table_name: str, rows: Iterable[Any] | AsyncIterable[Any], columns: list[tuple[str, str]] | None = None,
                   delimiter: str = '|', encoding: str = 'LATIN9',
                   create_if_missing: bool = True, temporary: bool = False,
                   distribute_on_random: bool = True, logdir: str | None = None,
@@ -222,6 +223,36 @@ class SyncConnection:
             distribute_on_random=distribute_on_random,
             logdir=logdir,
             escape_char=escape_char,
+        ))
+
+    def load_csv(
+        self,
+        table_name: str,
+        csv_path: str,
+        delimiter: str = ',',
+        has_header: bool = True,
+        sample_size: int = 1000,
+        encoding: str = 'UTF8',
+        create_if_missing: bool = True,
+        temporary: bool = False,
+        distribute_on_random: bool = True,
+        escape_char: str | None = '\\',
+        logdir: str | None = None,
+    ) -> int:
+        if self._conn is None:
+            raise RuntimeError("Connection is closed")
+        return runner.run(self._conn.load_csv(  # type: ignore[no-any-return]
+            table_name=table_name,
+            csv_path=csv_path,
+            delimiter=delimiter,
+            has_header=has_header,
+            sample_size=sample_size,
+            encoding=encoding,
+            create_if_missing=create_if_missing,
+            temporary=temporary,
+            distribute_on_random=distribute_on_random,
+            escape_char=escape_char,
+            logdir=logdir,
         ))
 
     def transaction(self) -> _TransactionContext:

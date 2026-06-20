@@ -1,7 +1,7 @@
 import datetime
 import enum
 import re
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Iterable, AsyncIterable
 from decimal import Decimal
 from json import dumps
 from struct import Struct
@@ -590,27 +590,56 @@ def infer_columns_from_rows(rows: list[Any]) -> list[tuple[str, str]]:
     return columns
 
 
+def _format_csv_row(row, delimiter: str, escape_char: str | None,
+                     columns: list[tuple[str, str]] | None) -> str:
+    fields: list[str] = []
+    for i, val in enumerate(row):
+        if val is None:
+            fields.append('')
+        elif isinstance(val, bool):
+            fields.append('1' if val else '0')
+        elif (isinstance(val, str) and columns is not None
+              and i < len(columns) and columns[i][1] == 'BOOLEAN'):
+            fields.append('1' if val.lower() in ('true', 't', 'yes', 'y', 'on', '1') else '0')
+        else:
+            s = str(val)
+            if escape_char is not None:
+                s = s.replace(escape_char, escape_char + escape_char)
+                s = s.replace(delimiter, escape_char + delimiter)
+            fields.append(s)
+    return delimiter.join(fields)
+
+
 def rows_to_csv_bytes(rows: list[Any], delimiter: str = '|', encoding: str = 'latin-1', escape_char: str | None = '\\',
                        columns: list[tuple[str, str]] | None = None) -> bytes:
     parts: list[str] = []
     for row in rows:
-        fields: list[str] = []
-        for i, val in enumerate(row):
-            if val is None:
-                fields.append('')
-            elif isinstance(val, bool):
-                fields.append('1' if val else '0')
-            elif (isinstance(val, str) and columns is not None
-                  and i < len(columns) and columns[i][1] == 'BOOLEAN'):
-                fields.append('1' if val.lower() in ('true', 't', 'yes', 'y', 'on', '1') else '0')
-            else:
-                s = str(val)
-                if escape_char is not None:
-                    s = s.replace(escape_char, escape_char + escape_char)
-                    s = s.replace(delimiter, escape_char + delimiter)
-                fields.append(s)
-        parts.append(delimiter.join(fields))
+        parts.append(_format_csv_row(row, delimiter, escape_char, columns))
     return ('\n'.join(parts) + '\n').encode(encoding)
+
+
+async def rows_to_csv_chunks(rows: Iterable[Any] | AsyncIterable[Any],
+                              delimiter: str = '|', encoding: str = 'latin-1',
+                              escape_char: str | None = '\\',
+                              columns: list[tuple[str, str]] | None = None,
+                              chunk_size: int = 65536):
+    buffer = bytearray()
+    if isinstance(rows, AsyncIterable):
+        async for row in rows:
+            line = _format_csv_row(row, delimiter, escape_char, columns) + '\n'
+            buffer.extend(line.encode(encoding))
+            if len(buffer) >= chunk_size:
+                yield bytes(buffer)
+                buffer = bytearray()
+    else:
+        for row in rows:
+            line = _format_csv_row(row, delimiter, escape_char, columns) + '\n'
+            buffer.extend(line.encode(encoding))
+            if len(buffer) >= chunk_size:
+                yield bytes(buffer)
+                buffer = bytearray()
+    if buffer:
+        yield bytes(buffer)
 
 
 __all__ = [
@@ -633,4 +662,5 @@ __all__ = [
     "pg_array_types", "pg_to_py_encodings",
     "_infer_nz_type", "infer_columns_from_rows",
     "rows_to_csv_bytes",
+    "rows_to_csv_chunks",
 ]

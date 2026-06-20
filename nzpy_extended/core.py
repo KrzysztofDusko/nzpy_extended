@@ -8,7 +8,7 @@ import platform
 import socket
 import asyncio
 from collections import defaultdict, deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, AsyncIterable
 from copy import deepcopy
 from datetime import (datetime as Datetime)
 
@@ -61,6 +61,7 @@ from .utils import (
     pg_array_types,
     infer_columns_from_rows,
     rows_to_csv_bytes,
+    rows_to_csv_chunks,
     pg_to_py_encodings,
 )
 
@@ -514,7 +515,7 @@ class Connection:
         except Exception as e:
             self.log.warning("Could not send cancel request: %s", str(e))
 
-    async def load_data(self, table_name: str, rows: list[Any], columns: list[tuple[str, str]] | None = None,
+    async def load_data(self, table_name: str, rows: Iterable[Any] | AsyncIterable[Any], columns: list[tuple[str, str]] | None = None,
                         delimiter: str = '|', encoding: str = 'LATIN9',
                         create_if_missing: bool = True, temporary: bool = False,
                         distribute_on_random: bool = True, logdir: str | None = None,
@@ -523,12 +524,22 @@ class Connection:
             logdir = tempfile.gettempdir()
 
         if create_if_missing and columns is None:
-            rows_iter = iter(rows)
-            try:
-                first_row = next(rows_iter)
-            except StopIteration:
-                raise ProgrammingError("No rows to load") from None
-            remaining = list(rows_iter)
+            if isinstance(rows, AsyncIterable):
+                rows_iter = rows.__aiter__()
+                try:
+                    first_row = await rows_iter.__anext__()
+                except StopAsyncIteration:
+                    raise ProgrammingError("No rows to load") from None
+                remaining: list[Any] = []
+                async for row in rows_iter:
+                    remaining.append(row)
+            else:
+                rows_iter = iter(rows)
+                try:
+                    first_row = next(rows_iter)
+                except StopIteration:
+                    raise ProgrammingError("No rows to load") from None
+                remaining = list(rows_iter)
             all_rows = [first_row] + remaining
             columns = infer_columns_from_rows(all_rows)
             rows = all_rows
@@ -549,9 +560,13 @@ class Connection:
         if columns is not None and any(t.startswith('NVARCHAR') or t.startswith('NCLOB') for _, t in columns):
             encoding = 'UTF8'
 
-        csv_bytes = rows_to_csv_bytes(rows, delimiter, encoding, escape_char,
-                                       columns=columns)
-        self._ext_table_source = csv_bytes
+        if isinstance(rows, (list, tuple)):
+            csv_bytes = rows_to_csv_bytes(rows, delimiter, encoding, escape_char,
+                                           columns=columns)
+            self._ext_table_source = csv_bytes
+        else:
+            self._ext_table_source = rows_to_csv_chunks(rows, delimiter, encoding, escape_char,
+                                                         columns=columns)
 
         using_opts = f"ENCODING '{encoding}' REMOTESOURCE 'python' DELIMITER '{delimiter}'"
         if escape_char is not None:
@@ -570,6 +585,35 @@ class Connection:
         cur = self.cursor()
         await cur.execute(sql)
         return cur.rowcount
+
+    async def load_csv(
+        self,
+        table_name: str,
+        csv_path: str,
+        delimiter: str = ',',
+        has_header: bool = True,
+        sample_size: int = 1000,
+        encoding: str = 'UTF8',
+        create_if_missing: bool = True,
+        temporary: bool = False,
+        distribute_on_random: bool = True,
+        escape_char: str | None = '\\',
+        logdir: str | None = None,
+    ) -> int:
+        from .csv_import import load_csv as _load_csv
+
+        return await _load_csv(
+            self, table_name, csv_path,
+            delimiter=delimiter,
+            has_header=has_header,
+            sample_size=sample_size,
+            encoding=encoding,
+            create_if_missing=create_if_missing,
+            temporary=temporary,
+            distribute_on_random=distribute_on_random,
+            escape_char=escape_char,
+            logdir=logdir,
+        )
 
     def inspect_datetime(self, value: Datetime) -> Any:
         if value.tzinfo is None:
