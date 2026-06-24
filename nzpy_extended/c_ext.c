@@ -1153,7 +1153,9 @@ static PyObject* c_process_dbos_batch(PyObject *self, PyObject *args) {
     PyMem_Free(c_physField); PyMem_Free(c_field_type); PyMem_Free(c_field_size);
     PyMem_Free(c_field_trueSize); PyMem_Free(c_field_offset); PyMem_Free(c_field_fixedSize);
     PyBuffer_Release(&view);
-    return Py_BuildValue("On", rows_list, bytes_consumed);
+    PyObject *ret = Py_BuildValue("On", rows_list, bytes_consumed);
+    Py_DECREF(rows_list);
+    return ret;
 }
 
 static PyObject* c_hello(PyObject *self, PyObject *args) {
