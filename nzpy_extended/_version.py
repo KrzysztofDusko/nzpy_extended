@@ -131,6 +131,27 @@ def versions_from_egg_info(root, verbose):
     raise NotThisMethod("no PKG-INFO version found")
 
 
+def versions_from_install_metadata(verbose):
+    # Installed wheels/sdists expose the release version in distribution
+    # metadata, but no longer ship PKG-INFO next to the package source tree.
+    try:
+        from importlib import metadata as importlib_metadata
+    except ImportError:
+        import importlib_metadata  # type: ignore[import-not-found, no-redef]
+
+    try:
+        version = importlib_metadata.version("nzpy_extended")
+    except importlib_metadata.PackageNotFoundError:
+        raise NotThisMethod("package not installed")
+
+    if version:
+        if verbose:
+            print("picked version '%s' from install metadata" % version)
+        return {"version": version, "full-revisionid": None,
+                "dirty": False, "error": None}
+    raise NotThisMethod("empty install metadata version")
+
+
 @register_vcs_handler("git", "get_keywords")
 def git_get_keywords(versionfile_abs):
     # the code embedded in _version.py can just fetch the value of these
@@ -481,6 +502,11 @@ def get_versions():
 
     try:
         return versions_from_egg_info(root, verbose)
+    except NotThisMethod:
+        pass
+
+    try:
+        return versions_from_install_metadata(verbose)
     except NotThisMethod:
         pass
 
