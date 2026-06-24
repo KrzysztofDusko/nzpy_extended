@@ -86,7 +86,7 @@ jobs:
         run: |
           python -c "
           import nzpy_extended
-          from nzpy_extended import _HAVE_C_EXT
+          from nzpy_extended._cstate import _HAVE_C_EXT
           print('version:', nzpy_extended.__version__)
           print('C extension:', _HAVE_C_EXT)
           assert nzpy_extended.__version__ != '0+unknown'
