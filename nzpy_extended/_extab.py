@@ -93,8 +93,12 @@ class ExternalTableManager:
                 try:
                     await asyncio.to_thread(fh.close)
                     conn.log.debug("Closed export file: %s", fname)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    conn.log.debug(
+                        "Error closing external table export file: %s",
+                        exc,
+                        exc_info=True,
+                    )
 
     # ----- Outbound (client to server) — data transmission -----------------
 
@@ -222,8 +226,12 @@ class ExternalTableManager:
                 val = bytearray(i_pack(EXTAB_SOCK_ERROR))
                 await conn._write(val)
                 await conn._flush()
-            except Exception:
-                pass
+            except Exception as exc:
+                conn.log.debug(
+                    "Error sending EXTAB_SOCK_ERROR after file failure: %s",
+                    exc,
+                    exc_info=True,
+                )
             raise
 
     # ----- Log / error file retrieval --------------------------------------

@@ -13,11 +13,12 @@ from __future__ import annotations
 import asyncio
 import os
 import stat
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Type
 
 from .exceptions import (
     ConnectionClosedError,
     DataError,
+    Error,
     IntegrityError,
     InterfaceError,
     InternalError,
@@ -117,6 +118,7 @@ class ProtocolHandler:
             if s != b""
         )
         response_code = msg.get(RESPONSE_CODE, "")
+        cls: Type[Error]
         if response_code == "28000":
             cls = InterfaceError
         elif response_code == "23505":
@@ -148,6 +150,25 @@ class ProtocolHandler:
 
     async def handle_PARAMETER_DESCRIPTION(self, data: bytes, ps: Any) -> None:
         pass
+
+    async def _deliver_notice(
+        self,
+        cursor: Cursor,
+        notice: str,
+        *,
+        append_empty_row: bool = False,
+    ) -> None:
+        conn = self._conn
+        cursor.notices.append(notice)
+        handler = cursor.notice_handler
+        if handler is not None and callable(handler):
+            try:
+                handler(notice)
+            except Exception as e:
+                conn.log.warning("Error in notice_handler: %s", e)
+        conn.log.debug("Response received from backend:%s", notice)
+        if append_empty_row:
+            cursor.cached_rows.append([])
 
     async def handle_COPY_DONE(self, data: bytes, ps: Any) -> None:
         self._conn._copy_done = True
@@ -199,7 +220,7 @@ class ProtocolHandler:
             field: dict[str, Any] = dict(
                 zip(
                     ("type_oid", "type_size", "type_modifier", "format"),
-                    ihic_unpack(data, idx),  # type: ignore[name-defined]
+                    ihic_unpack(data, idx),
                 )
             )
             field["name"] = name
@@ -343,10 +364,12 @@ class ProtocolHandler:
 
         while code != READY_FOR_QUERY:
             code, data_len = ci_unpack(await conn._read(5))
+            if not isinstance(code, bytes):
+                raise InterfaceError("protocol message code missing")
             await self.message_types[code](await conn._read(data_len - 4), cursor)
 
         if conn.error is not None:
-            raise conn.error  # type: ignore[misc]
+            raise conn.error
 
     async def close_prepared_statement(self, statement_name_bin: bytes) -> None:
         conn = self._conn
@@ -514,7 +537,7 @@ class ProtocolHandler:
                     if is_fifo:
                         fh = await asyncio.to_thread(open, fname, "wb")
                     else:
-                        fh = await asyncio.to_thread(open, fname, "wb+")
+                        fh = await asyncio.to_thread(open, fname, "wb+")  # type: ignore[arg-type]
                     conn.log.debug("Successfully opened file: %s", fname)
                     buf = bytearray(i_pack(0))
                     await conn._write(buf)
@@ -559,15 +582,7 @@ class ProtocolHandler:
                 if notice.startswith("NOTICE:"):
                     notice = notice[len("NOTICE:"):]
                 notice = notice.strip().rstrip("\x00")
-                cursor.notices.append(notice)
-                if getattr(cursor, "notice_handler", None) and callable(
-                    cursor.notice_handler
-                ):
-                    try:
-                        cursor.notice_handler(notice)
-                    except Exception as e:
-                        conn.log.warning("Error in notice_handler: %s", e)
-                conn.log.debug("Response received from backend:%s", notice)
+                await self._deliver_notice(cursor, notice)
                 yield "NOTICE"
 
             if response == b"I":
@@ -576,16 +591,7 @@ class ProtocolHandler:
                 if notice.startswith("NOTICE:"):
                     notice = notice[len("NOTICE:"):]
                 notice = notice.strip().rstrip("\x00")
-                cursor.notices.append(notice)
-                if getattr(cursor, "notice_handler", None) and callable(
-                    cursor.notice_handler
-                ):
-                    try:
-                        cursor.notice_handler(notice)
-                    except Exception as e:
-                        conn.log.warning("Error in notice_handler: %s", e)
-                conn.log.debug("Response received from backend:%s", notice)
-                cursor.cached_rows.append([])
+                await self._deliver_notice(cursor, notice, append_empty_row=True)
                 yield "NOTICE"
 
             if response == b"s":

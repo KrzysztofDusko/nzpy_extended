@@ -89,6 +89,7 @@ class NzPool:
         self._checked_out: dict[int, Connection] = {}
         self._log = logging.getLogger("nzpy_extended.NzPool")
         self._maintain_task: asyncio.Task[None] | None = None
+        self._reserving: set[int] = set()
 
     async def _create_new_connection(self) -> Connection:
         conn = Connection()
@@ -105,8 +106,12 @@ class NzPool:
             except Exception:
                 try:
                     await conn.close()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self._log.debug(
+                        "Error closing connection after on_connect failure: %s",
+                        exc,
+                        exc_info=True,
+                    )
                 raise
         return conn
 
@@ -133,8 +138,10 @@ class NzPool:
     async def _close_connection(self, pc: _PooledConnection) -> None:
         try:
             await pc.conn.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            self._log.debug(
+                "Error closing pooled connection: %s", exc, exc_info=True
+            )
 
     async def _fill_idle(self) -> None:
         while self._created < self.min_size:
@@ -148,13 +155,14 @@ class NzPool:
                 break
 
     def get_stats(self) -> dict[str, Any]:
+        """Return a best-effort snapshot of pool counters."""
         return {
             "type":           "NzPool",
             "pool_min":       self.min_size,
             "pool_max":       self.max_size,
             "pool_size":      self._created,
             "pool_available": len(self._pool),
-            "pool_in_use":    len(self._checked_out),
+            "pool_in_use":    len(self._checked_out) + len(self._reserving),
             "pool_closed":    self._closed,
         }
 
@@ -192,16 +200,17 @@ class NzPool:
         deadline = time.monotonic() + self.acquire_timeout if self.acquire_timeout > 0 else float("inf")
 
         while True:
+            pc: _PooledConnection | None = None
             async with self._cond:
                 if self._created < self.min_size:
                     await self._fill_idle()
 
                 if self._pool:
                     pc = self._pool.popleft()
+                    self._reserving.add(id(pc.conn))
                 elif self._created < self.max_size:
                     try:
                         conn = await self._create_new_connection()
-                        _ = time.monotonic()
                         self._created += 1
                         conn._nzpy_pool_uses = 1  # type: ignore[attr-defined]
                         self._checked_out[id(conn)] = conn
@@ -225,16 +234,26 @@ class NzPool:
                         )
                     continue
 
-            if await self._validate_connection(pc):
-                async with self._cond:
-                    pc.use_count += 1
-                    pc.conn._nzpy_pool_uses = pc.use_count  # type: ignore[attr-defined]
-                    self._checked_out[id(pc.conn)] = pc.conn
-                return pc.conn
-            else:
+            if pc is None:
+                continue
+            try:
+                if await self._validate_connection(pc):
+                    async with self._cond:
+                        self._reserving.discard(id(pc.conn))
+                        pc.use_count += 1
+                        pc.conn._nzpy_pool_uses = pc.use_count  # type: ignore[attr-defined]
+                        self._checked_out[id(pc.conn)] = pc.conn
+                    return pc.conn
                 await self._close_connection(pc)
                 async with self._cond:
+                    self._reserving.discard(id(pc.conn))
                     self._created -= 1
+            except Exception:
+                await self._close_connection(pc)
+                async with self._cond:
+                    self._reserving.discard(id(pc.conn))
+                    self._created -= 1
+                raise
 
     async def release(self, conn: Connection) -> None:
         conn_id = id(conn)
@@ -242,8 +261,12 @@ class NzPool:
         if not conn.autocommit and conn.in_transaction:
             try:
                 await conn.rollback()
-            except Exception:
-                pass
+            except Exception as exc:
+                self._log.debug(
+                    "Error rolling back connection on release: %s",
+                    exc,
+                    exc_info=True,
+                )
 
         _clear_stale_cursor(conn)
 
@@ -285,8 +308,12 @@ class NzPool:
             for conn in self._checked_out.values():
                 try:
                     await conn.close()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self._log.debug(
+                        "Error closing checked-out connection: %s",
+                        exc,
+                        exc_info=True,
+                    )
             self._checked_out.clear()
             self._cond.notify_all()
 
@@ -335,6 +362,7 @@ class SyncPool:
         self._maintain_thread = threading.Thread(
             target=self._maintain_loop, daemon=True
         )
+        self._log = logging.getLogger("nzpy_extended.SyncPool")
         self._maintain_thread.start()
 
         for _ in range(min_size):
@@ -379,10 +407,19 @@ class SyncPool:
             with self._lock:
                 if self._closed:
                     break
-                stale: list[_SyncPooledConnection] = []
-                for pc in list(self._pool):
-                    if not self._validate_connection(pc):
-                        stale.append(pc)
+                candidates = list(self._pool)
+
+            stale: list[_SyncPooledConnection] = []
+            for pc in candidates:
+                if not self._validate_connection(pc):
+                    stale.append(pc)
+
+            if not stale:
+                continue
+
+            with self._lock:
+                if self._closed:
+                    break
                 for pc in stale:
                     try:
                         self._pool.remove(pc)
@@ -392,8 +429,12 @@ class SyncPool:
             for pc in stale:
                 try:
                     pc.conn.close()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self._log.debug(
+                        "Error closing stale pooled connection: %s",
+                        exc,
+                        exc_info=True,
+                    )
 
     def acquire(self) -> Any:
         if self._closed:
@@ -404,32 +445,74 @@ class SyncPool:
                 f"Could not acquire connection within {self.acquire_timeout}s "
                 f"(pool_size={self._created}, in_use={len(self._checked_out)})"
             )
-        with self._lock:
-            if self._closed:
-                self._sem.release()
-                raise RuntimeError("Pool was closed while waiting for a connection")
-            while self._pool:
-                pc = self._pool.popleft()
-                if self._validate_connection(pc):
-                    pc.use_count += 1
-                    conn_id = id(pc.conn)
-                    self._checked_out.add(conn_id)
-                    self._checked_out_pc[conn_id] = pc
-                    return pc.conn
-                else:
-                    try:
-                        pc.conn.close()
-                    except Exception:
-                        pass
-                    self._created -= 1
 
-            conn = _sync.connect(on_connect=self.on_connect, **self._kwargs)
-            now = time.monotonic()
-            self._created += 1
-            conn_id = id(conn)
-            self._checked_out.add(conn_id)
-            self._checked_out_pc[conn_id] = _SyncPooledConnection(conn, now, now, 1)
-            return conn
+        while True:
+            pc: _SyncPooledConnection | None = None
+            with self._lock:
+                if self._closed:
+                    self._sem.release()
+                    raise RuntimeError("Pool was closed while waiting for a connection")
+                if self._pool:
+                    pc = self._pool.popleft()
+                else:
+                    conn = _sync.connect(on_connect=self.on_connect, **self._kwargs)
+                    now = time.monotonic()
+                    self._created += 1
+                    conn_id = id(conn)
+                    self._checked_out.add(conn_id)
+                    self._checked_out_pc[conn_id] = _SyncPooledConnection(
+                        conn, now, now, 1
+                    )
+                    return conn
+
+            if pc is None:
+                continue
+            try:
+                if self._validate_connection(pc):
+                    with self._lock:
+                        if self._closed:
+                            try:
+                                pc.conn.close()
+                            except Exception as exc:
+                                self._log.debug(
+                                    "Error closing connection after pool close: %s",
+                                    exc,
+                                    exc_info=True,
+                                )
+                            self._created -= 1
+                            self._sem.release()
+                            raise RuntimeError(
+                                "Pool was closed during connection validation"
+                            )
+                        pc.use_count += 1
+                        conn_id = id(pc.conn)
+                        self._checked_out.add(conn_id)
+                        self._checked_out_pc[conn_id] = pc
+                    return pc.conn
+                try:
+                    pc.conn.close()
+                except Exception as exc:
+                    self._log.debug(
+                        "Error closing invalid pooled connection: %s",
+                        exc,
+                        exc_info=True,
+                    )
+                with self._lock:
+                    self._created -= 1
+            except RuntimeError:
+                raise
+            except Exception:
+                try:
+                    pc.conn.close()
+                except Exception as exc:
+                    self._log.debug(
+                        "Error closing connection after validation failure: %s",
+                        exc,
+                        exc_info=True,
+                    )
+                with self._lock:
+                    self._created -= 1
+                raise
 
     def release(self, conn: Any) -> None:
         with self._lock:
@@ -446,8 +529,12 @@ class SyncPool:
             if self._closed:
                 try:
                     conn.close()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self._log.debug(
+                        "Error closing connection on release after pool close: %s",
+                        exc,
+                        exc_info=True,
+                    )
                 finally:
                     if self._created > 0:
                         self._created -= 1
@@ -456,8 +543,12 @@ class SyncPool:
                 if async_conn is not None and not async_conn.autocommit and async_conn.in_transaction:
                     try:
                         conn.rollback()
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        self._log.debug(
+                            "Error rolling back sync connection on release: %s",
+                            exc,
+                            exc_info=True,
+                        )
                 pc.last_used = time.monotonic()
                 self._pool.append(pc)
         self._sem.release()
@@ -490,14 +581,20 @@ class SyncPool:
                 pc = self._pool.popleft()
                 try:
                     pc.conn.close()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self._log.debug(
+                        "Error closing pooled connection: %s", exc, exc_info=True
+                    )
             self._created = 0
-            for conn_id, pc in list(self._checked_out_pc.items()):
+            for pc in list(self._checked_out_pc.values()):
                 try:
                     pc.conn.close()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self._log.debug(
+                        "Error closing checked-out connection: %s",
+                        exc,
+                        exc_info=True,
+                    )
             self._checked_out.clear()
             self._checked_out_pc.clear()
             for _ in range(self.max_size):
@@ -507,8 +604,10 @@ class SyncPool:
                     pass
         try:
             self._maintain_thread.join(timeout=2.0)
-        except Exception:
-            pass
+        except Exception as exc:
+            self._log.debug(
+                "Error joining maintain thread: %s", exc, exc_info=True
+            )
 
     def __enter__(self) -> SyncPool:
         return self
@@ -518,6 +617,8 @@ class SyncPool:
 
 
 class NullPool:
+    _log = logging.getLogger("nzpy_extended.NullPool")
+
     def __init__(self, on_connect: Callable[[Any], Any] | None = None, **conn_kwargs: Any) -> None:
         self._kwargs = conn_kwargs
         self._on_connect = on_connect
@@ -528,8 +629,10 @@ class NullPool:
     def release(self, conn: Any) -> None:
         try:
             conn.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            self._log.debug(
+                "Error closing NullPool connection: %s", exc, exc_info=True
+            )
 
     @contextmanager
     def connection(self) -> Generator[Any, None, None]:
@@ -553,6 +656,8 @@ class NullPool:
 
 
 class AsyncNullPool:
+    _log = logging.getLogger("nzpy_extended.AsyncNullPool")
+
     def __init__(self, on_connect: Callable[[Connection], Any] | None = None, **conn_kwargs: Any) -> None:
         self._kwargs = conn_kwargs
         self._on_connect = on_connect
@@ -571,8 +676,10 @@ class AsyncNullPool:
     async def release(self, conn: Connection) -> None:
         try:
             await conn.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            self._log.debug(
+                "Error closing AsyncNullPool connection: %s", exc, exc_info=True
+            )
 
     @asynccontextmanager
     async def connection(self) -> AsyncGenerator[Connection, None]:

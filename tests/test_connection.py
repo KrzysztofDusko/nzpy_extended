@@ -135,48 +135,34 @@ async def test_scram_sha_256(db_kwargs):
         await nzpy.connect(**db_kwargs)
 
 
-'''
-def testNotify(con):
+@pytest.mark.full
+@pytest.mark.asyncio
+async def test_bytes_database_name_raises(db_kwargs):
+    db_kwargs = dict(db_kwargs)
+    db_kwargs["database"] = bytes("nzpy_sn\uFF6Fw", "utf8")
+    with pytest.raises(nzpy.ProgrammingError):
+        await nzpy.connect(**db_kwargs)
+
+
+@pytest.mark.skip(reason="LISTEN/NOTIFY is PostgreSQL-specific; not supported on Netezza")
+@pytest.mark.full
+@pytest.mark.asyncio
+async def test_notify(con):
     assert list(con.notifications) == []
-    with con.cursor() as cursor:
-        cursor.execute("LISTEN test")
-        cursor.execute("NOTIFY test")
-        con.commit()
-        cursor.execute("VALUES (1, 2), (3, 4), (5, 6)")
-        assert len(con.notifications) == 1
-        assert con.notifications[0][1] == "test"
-# This requires a line in pg_hba.conf that requires gss for the database
-# nzpy_gss
-def testGss(db_kwargs):
+
+
+@pytest.mark.skip(reason="GSS/KRB5 authentication is not supported by nzpy_extended")
+@pytest.mark.full
+@pytest.mark.asyncio
+async def test_gss(db_kwargs):
+    db_kwargs = dict(db_kwargs)
     db_kwargs["database"] = "nzpy_gss"
-    # Should raise an exception saying gss isn't supported
-    with pytest.raises(
-            nzpy.InterfaceError,
-            match="Authentication method 7 not supported by nzpy."):
-        nzpy.connect(**db_kwargs)
-def testBytesDatabaseName(db_kwargs):
-    """ Should only raise an exception saying db doesn't exist """
-    db_kwargs["database"] = bytes("nzpy_sn\uFF6Fw", 'utf8')
-    with pytest.raises(nzpy.ProgrammingError, match='handshake'):
-        nzpy.connect(**db_kwargs)
-def test_broken_pipe(con, db_kwargs):
-    with nzpy.connect(**db_kwargs) as db1:
-        with db1.cursor() as cur1, con.cursor() as cur2:
-            cur1.execute("select pg_backend_pid()")
-            pid1 = cur1.fetchone()[0]
-            cur2.execute("select pg_terminate_backend(%s)", (pid1,))
-            try:
-                cur1.execute("select 1")
-            except Exception as e:
-                assert isinstance(e, (socket.error, struct.error))
-def testApplicatioName(db_kwargs):
-    app_name = 'my test application name'
-    db_kwargs['application_name'] = app_name
-    with nzpy.connect(**db_kwargs) as db:
-        cur = db.cursor()
-        cur.execute(
-            'select application_name from pg_stat_activity '
-            ' where pid = pg_backend_pid()')
-        application_name = cur.fetchone()[0]
-        assert application_name == app_name
-'''
+    with pytest.raises(nzpy.InterfaceError):
+        await nzpy.connect(**db_kwargs)
+
+
+@pytest.mark.skip(reason="pg_terminate_backend is PostgreSQL-specific; not available on Netezza")
+@pytest.mark.full
+@pytest.mark.asyncio
+async def test_broken_pipe(con, db_kwargs):
+    pass

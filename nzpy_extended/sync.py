@@ -102,8 +102,8 @@ class SyncCursor:
     def __exit__(self, *args: Any) -> None:
         try:
             self.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log.debug("Error closing sync cursor: %s", exc, exc_info=True)
 
     def __iter__(self) -> Any:
         while True:
@@ -142,13 +142,21 @@ class _TransactionContext:
         if exc_type:
             try:
                 self._conn.rollback()
-            except Exception:
-                pass
+            except Exception as exc:
+                _log.debug(
+                    "Error rolling back sync transaction context: %s",
+                    exc,
+                    exc_info=True,
+                )
         else:
             try:
                 self._conn.commit()
-            except Exception:
-                pass
+            except Exception as exc:
+                _log.debug(
+                    "Error committing sync transaction context: %s",
+                    exc,
+                    exc_info=True,
+                )
         return False
 
 
@@ -282,8 +290,8 @@ class SyncConnection:
                         usock.close()
                     except OSError as e:
                         _log.warning("Socket close error in __del__: %s", e)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log.debug("Error in SyncConnection.__del__: %s", exc, exc_info=True)
 
     def __enter__(self) -> SyncConnection:
         return self
@@ -292,17 +300,27 @@ class SyncConnection:
         if exc_type:
             try:
                 self.rollback()
-            except Exception:
-                pass
+            except Exception as exc:
+                _log.debug(
+                    "Error rolling back sync connection context: %s",
+                    exc,
+                    exc_info=True,
+                )
         else:
             try:
                 self.commit()
-            except Exception:
-                pass
+            except Exception as exc:
+                _log.debug(
+                    "Error committing sync connection context: %s",
+                    exc,
+                    exc_info=True,
+                )
         try:
             self.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log.debug(
+                "Error closing sync connection context: %s", exc, exc_info=True
+            )
         return False
 
 

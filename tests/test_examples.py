@@ -12,16 +12,6 @@ from nzpy_extended import SyncPool
 pytestmark = pytest.mark.smoke
 
 
-@pytest.fixture
-def synccon(db_kwargs_fn):
-    conn = sync_nzpy.connect(**db_kwargs_fn)
-    yield conn
-    try:
-        conn.close()
-    except Exception:
-        pass
-
-
 class TestExample13SyncBasic:
     """Verify patterns from examples/13_sync_basic.py."""
 

@@ -362,7 +362,7 @@ class DbosParser:
         if tupdesc.field_fixedSize[cur_field] != 0:
             return data[tupdesc.field_offset[cur_field]:]
         return DbosParser.CTable_i_varFieldPtr(
-            data, tupdesc.fixedFieldsSize, tupdesc.field_offset[cur_field]
+            data, tupdesc.fixedFieldsSize or 0, tupdesc.field_offset[cur_field]
         )
 
     @staticmethod

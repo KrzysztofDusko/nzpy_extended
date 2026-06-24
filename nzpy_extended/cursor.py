@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio
 from collections import deque
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 from warnings import warn
 
@@ -27,6 +28,7 @@ class Cursor:
         self.stream: Any = None
         self._timeout: float | None = None
         self._exec_gen: int | None = None
+        self.notice_handler: Callable[[str], Any] | None = None
 
     async def __aenter__(self) -> Cursor:
         return self

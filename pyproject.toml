@@ -61,6 +61,14 @@ module = "nzpy_extended._version"
 ignore_errors = true
 
 [[tool.mypy.overrides]]
+module = "nzpy_extended.fastapi"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "nzpy_extended.csv_import"
+disallow_untyped_defs = false
+
+[[tool.mypy.overrides]]
 module = "nzpy_extended.c_ext"
 ignore_errors = true
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import os
 import tempfile
+from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -46,7 +47,7 @@ def _sample_csv_rows(
     return rows, header
 
 
-def _csv_row_generator(path: str, delimiter: str, has_header: bool, encoding: str):
+def _csv_row_generator(path: str, delimiter: str, has_header: bool, encoding: str) -> Iterable[tuple[str, ...]]:
     """Read CSV rows one-by-one via csv.reader (handles quoting, multi-line fields)."""
     encoding = _resolve_encoding(encoding)
     with open(path, newline='', encoding=encoding) as f:

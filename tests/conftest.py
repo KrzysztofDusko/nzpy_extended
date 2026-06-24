@@ -64,6 +64,19 @@ async def cursor(con):
 
 
 @pytest.fixture
+def synccon(db_kwargs_fn):
+    """Fresh sync connection, closed after every test."""
+    import nzpy_extended.sync as sync_nzpy
+
+    conn = sync_nzpy.connect(**db_kwargs_fn)
+    yield conn
+    try:
+        conn.close()
+    except Exception:
+        pass
+
+
+@pytest.fixture
 def is_java():
     return "java" in sys.platform.lower()
 

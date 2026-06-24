@@ -131,13 +131,21 @@ class Connection:
         if exc_type:
             try:
                 await self.rollback()
-            except Exception:
-                pass
+            except Exception as exc:
+                self.log.debug(
+                    "Error rolling back in connection context exit: %s",
+                    exc,
+                    exc_info=True,
+                )
         else:
             try:
                 await self.commit()
-            except Exception:
-                pass
+            except Exception as exc:
+                self.log.debug(
+                    "Error committing in connection context exit: %s",
+                    exc,
+                    exc_info=True,
+                )
         try:
             await self.close()
         except ConnectionClosedError:
@@ -147,16 +155,27 @@ class Connection:
         try:
             usock = getattr(self, '_usock', None)
             if usock is not None:
+                log = getattr(self, 'log', logging.getLogger("nzpy_extended"))
                 try:
                     usock.shutdown(socket.SHUT_RDWR)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log.debug(
+                        "Socket shutdown error in Connection.__del__: %s",
+                        exc,
+                        exc_info=True,
+                    )
                 try:
                     usock.close()
-                except Exception:
-                    pass
-        except Exception:
-            pass
+                except Exception as exc:
+                    log.debug(
+                        "Socket close error in Connection.__del__: %s",
+                        exc,
+                        exc_info=True,
+                    )
+        except Exception as exc:
+            logging.getLogger("nzpy_extended").debug(
+                "Error in Connection.__del__: %s", exc, exc_info=True
+            )
 
     def _getError(self, error: type) -> type:
         warn(
@@ -470,8 +489,8 @@ class Connection:
                 except OSError as e:
                     self.log.warning("Socket close error during close: %s", e)
                 self._usock = None
-        except Exception:
-            pass
+        except Exception as exc:
+            self.log.debug("Error during connection close cleanup: %s", exc, exc_info=True)
 
         if hasattr(self, '_stream') and self._stream is not None:
             try:
@@ -491,7 +510,10 @@ class Connection:
 
         try:
             if getattr(self, '_unix_sock', None) is not None:
-                reader, writer = await asyncio.open_unix_connection(self._unix_sock)  # pyright: ignore[reportAttributeAccessIssue,reportUnknownMemberType,reportUnknownVariableType]
+                open_unix = getattr(asyncio, "open_unix_connection", None)
+                if open_unix is None:
+                    return
+                reader, writer = await open_unix(self._unix_sock)
             else:
                 if getattr(self, '_host', None) is None:
                     return
@@ -507,8 +529,10 @@ class Connection:
             await writer.drain()  # pyright: ignore[reportUnknownMemberType]
             try:
                 await reader.read(1)  # pyright: ignore[reportUnknownMemberType]
-            except Exception:
-                pass
+            except Exception as exc:
+                self.log.debug(
+                    "Error reading cancel response: %s", exc, exc_info=True
+                )
             writer.close()  # pyright: ignore[reportUnknownMemberType]
             await writer.wait_closed()  # pyright: ignore[reportUnknownMemberType]
             self.log.info("Sent cancellation request to backend")
@@ -534,12 +558,12 @@ class Connection:
                 async for row in rows_iter:
                     remaining.append(row)
             else:
-                rows_iter = iter(rows)
+                sync_iter = iter(rows)
                 try:
-                    first_row = next(rows_iter)
+                    first_row = next(sync_iter)
                 except StopIteration:
                     raise ProgrammingError("No rows to load") from None
-                remaining = list(rows_iter)
+                remaining = list(sync_iter)
             all_rows = [first_row] + remaining
             columns = infer_columns_from_rows(all_rows)
             rows = all_rows

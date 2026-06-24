@@ -1,9 +1,30 @@
+from __future__ import annotations
+
+from typing import TypedDict
+
+
 class Warning(Exception):
     pass
 
 
 class Error(Exception):
     pass
+
+
+# Typed payload stored on Connection.error before raising DB-API exceptions.
+# Keys mirror PostgreSQL ErrorResponse fields (e.g. ``C`` = SQLSTATE, ``M`` = message).
+class ErrorResponseDict(TypedDict, total=False):
+    C: str
+    M: str
+    D: str
+    H: str
+    P: str
+    R: str
+    S: str
+    V: str
+    W: str
+    F: str
+    L: str
 
 
 class InterfaceError(Error):
@@ -56,7 +77,7 @@ class ArrayDimensionsNotConsistentError(ProgrammingError):
 
 
 __all__ = [
-    "Warning", "Error", "InterfaceError", "ConnectionClosedError",
+    "Warning", "Error", "ErrorResponseDict", "InterfaceError", "ConnectionClosedError",
     "DatabaseError", "DataError", "OperationalError", "IntegrityError",
     "InternalError", "ProgrammingError", "NotSupportedError",
     "ArrayContentNotSupportedError", "ArrayContentNotHomogenousError",

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import inspect
+import logging
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
+
+_log = logging.getLogger("nzpy_extended.fastapi")
 
 try:
     from fastapi import FastAPI, Request  # type: ignore[import-not-found,unused-ignore]
@@ -28,8 +31,12 @@ def lifespan(pool: Any) -> Any:
                     result = pool.close_all()
                     if inspect.iscoroutine(result):
                         await result
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _log.debug(
+                        "Error closing pool in FastAPI lifespan: %s",
+                        exc,
+                        exc_info=True,
+                    )
 
     return _lifespan
 

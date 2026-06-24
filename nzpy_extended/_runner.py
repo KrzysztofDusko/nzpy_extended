@@ -5,7 +5,10 @@ from typing import Any
 
 import asyncio
 import atexit
+import logging
 import threading
+
+_log = logging.getLogger("nzpy_extended._runner")
 
 
 class _SyncRunner:
@@ -43,8 +46,8 @@ class _SyncRunner:
     def _restart(self) -> None:
         try:
             self.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log.debug("Error closing runner during restart: %s", exc, exc_info=True)
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(
             target=self._loop.run_forever,
@@ -59,12 +62,12 @@ class _SyncRunner:
         self._loop.call_soon_threadsafe(self._loop.stop)
         try:
             self._thread.join(timeout=2.0)
-        except Exception:
-            pass
+        except Exception as exc:
+            _log.debug("Error joining sync runner thread: %s", exc, exc_info=True)
         try:
             self._loop.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log.debug("Error closing sync runner loop: %s", exc, exc_info=True)
 
     @property
     def is_running(self) -> bool:
@@ -73,8 +76,8 @@ class _SyncRunner:
     def _atexit_cleanup(self) -> None:
         try:
             self.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            _log.debug("Error during sync runner atexit cleanup: %s", exc, exc_info=True)
 
 
 runner: _SyncRunner = _SyncRunner()

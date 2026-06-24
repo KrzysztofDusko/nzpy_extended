@@ -467,6 +467,18 @@ asyncio.run(main())
 
 ### Running the test suite
 
+#### CI (GitHub Actions)
+
+Pull requests run **without a live Netezza database**:
+
+- Unit tests (`paramstyle`, regressions, C/Python parity, buffer pool/stream, pool, csv_import)
+- `mypy` and `pyright`
+- Wheel and sdist import smoke
+
+Integration tests (`smoke`, `full`, ODBC parity) must be run **locally** against your Netezza instance.
+
+#### Local integration
+
 Tests require a running Netezza instance. Set the connection environment variables:
 
 ```shell
@@ -477,10 +489,33 @@ export NZ_DEV_USER=admin
 export NZ_DEV_PASSWORD=password
 ```
 
-Run all tests:
+Run all tests locally:
 ```shell
 pytest tests/ -v
 ```
+
+CI-equivalent (no database):
+```shell
+pytest tests/test_paramstyle.py tests/test_typeobjects.py tests/test_regressions_unit.py \
+  tests/test_c_python_parity_unit.py tests/test_buffer_pool.py tests/test_buffered_stream.py \
+  tests/test_csv_import_unit.py tests/test_pool_unit.py -v
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for marker profiles (`smoke`, `full`, `unit`, `benchmark`).
+
+### Upgrading to 0.4.0
+
+If you connect with `securityLevel=2` and relied on automatic fallback to an unencrypted session when SSL fails, you must now opt in explicitly:
+
+```python
+await nzpy.connect(
+    ...,
+    securityLevel=2,
+    ssl={"ssl_allow_fallback": True},  # only if you need legacy behaviour
+)
+```
+
+See [CHANGELOG.md](CHANGELOG.md) for the full list of changes.
 
 ### C Extension / Pure Python parity
 

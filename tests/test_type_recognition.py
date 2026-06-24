@@ -184,9 +184,9 @@ async def test_description_oid_table_protocol(sql_fragment, expected_oid_name):
                 f"got {col_oid}, expected {expected_oid}"
             )
         else:
-            # Dbos protocol may not populate description on older versions
-            # — skip with a note
-            pass
+            pytest.skip(
+                "Dbos protocol did not populate description for this query"
+            )
     finally:
         await conn.close()
 

@@ -207,6 +207,21 @@ def test_float_metadata_uses_negative_scale():
 def test_ssl_verify_flag_defaults_to_true():
     conn = Connection()
     params = conn.connect.__code__.co_varnames
+    assert "ssl_verify" in params
+
+
+def test_ssl_allow_fallback_defaults_to_fail_closed():
+    from nzpy_extended.handshake import SyncHandshake
+    import logging
+
+    hs = SyncHandshake.__new__(SyncHandshake)
+    hs.ssl_params = {}
+    hs.log = logging.getLogger("test")
+    assert hs._ssl_allow_fallback() is False
+
+    hs.ssl_params = {"ssl_allow_fallback": True}
+    assert hs._ssl_allow_fallback() is True
+
 
 def test_connect_timeout_parameter():
     conn = Connection()

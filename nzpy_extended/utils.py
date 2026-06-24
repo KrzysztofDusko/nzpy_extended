@@ -1,7 +1,7 @@
 import datetime
 import enum
 import re
-from collections.abc import Callable, Generator, Iterable, AsyncIterable
+from collections.abc import Callable, Generator, Iterable, AsyncIterable, Sequence
 from decimal import Decimal
 from json import dumps
 from struct import Struct
@@ -590,7 +590,7 @@ def infer_columns_from_rows(rows: list[Any]) -> list[tuple[str, str]]:
     return columns
 
 
-def _format_csv_row(row, delimiter: str, escape_char: str | None,
+def _format_csv_row(row: Sequence[Any], delimiter: str, escape_char: str | None,
                      columns: list[tuple[str, str]] | None) -> str:
     fields: list[str] = []
     for i, val in enumerate(row):
@@ -610,7 +610,7 @@ def _format_csv_row(row, delimiter: str, escape_char: str | None,
     return delimiter.join(fields)
 
 
-def rows_to_csv_bytes(rows: list[Any], delimiter: str = '|', encoding: str = 'latin-1', escape_char: str | None = '\\',
+def rows_to_csv_bytes(rows: Sequence[Any], delimiter: str = '|', encoding: str = 'latin-1', escape_char: str | None = '\\',
                        columns: list[tuple[str, str]] | None = None) -> bytes:
     parts: list[str] = []
     for row in rows:
@@ -622,7 +622,7 @@ async def rows_to_csv_chunks(rows: Iterable[Any] | AsyncIterable[Any],
                               delimiter: str = '|', encoding: str = 'latin-1',
                               escape_char: str | None = '\\',
                               columns: list[tuple[str, str]] | None = None,
-                              chunk_size: int = 65536):
+                              chunk_size: int = 65536) -> AsyncIterable[bytes]:
     buffer = bytearray()
     if isinstance(rows, AsyncIterable):
         async for row in rows:

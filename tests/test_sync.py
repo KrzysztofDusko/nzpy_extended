@@ -11,7 +11,7 @@ import nzpy_extended as nzpy
 import nzpy_extended.sync as sync_nzpy
 from nzpy_extended.pool import SyncPool, NullPool, AsyncNullPool
 
-pytestmark = pytest.mark.smoke
+pytestmark = [pytest.mark.smoke, pytest.mark.full]
 
 HEAVY_SQL = """
     /*OPIS:test_sync_timeout*/

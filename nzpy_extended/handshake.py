@@ -249,9 +249,15 @@ class SyncHandshake:
                        self._protocol1, self._protocol2)
         return True
 
+    def _ssl_allow_fallback(self) -> bool:
+        if isinstance(self.ssl_params, dict):
+            return bool(self.ssl_params.get('ssl_allow_fallback', False))
+        return False
+
     def conn_secure_session(self, securityLevel: int) -> bool:
         information = HSV2_SSL_NEGOTIATE
         currSecLevel = securityLevel
+        requested_security = securityLevel
         ssl_context: ssl.SSLContext | None = None
 
         while information != 0:
@@ -313,9 +319,11 @@ class SyncHandshake:
                     except ImportError:
                         raise InterfaceError("SSL required but ssl module not available in this python installation")
                     except ssl.SSLError:
-                        if currSecLevel == 2:
+                        if currSecLevel == 2 and self._ssl_allow_fallback():
                             self.log.debug("Problem establishing secured session")
-                            self.log.debug("Attempting unsecured session")
+                            self.log.debug(
+                                "Attempting unsecured session (ssl_allow_fallback=True)"
+                            )
                             currSecLevel = 1
                             information = HSV2_SSL_NEGOTIATE
                             continue
@@ -323,6 +331,13 @@ class SyncHandshake:
                         return False
                 elif beresp == b'N':
                     if information == HSV2_SSL_NEGOTIATE:
+                        if requested_security >= 2 and not self._ssl_allow_fallback():
+                            self.log.warning(
+                                "Server offered unsecured session but ssl_allow_fallback "
+                                "is not enabled (requested securityLevel=%s)",
+                                requested_security,
+                            )
+                            return False
                         self.log.debug("Attempting unsecured session")
                     information = 0
                     return True
