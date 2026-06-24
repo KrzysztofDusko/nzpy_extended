@@ -38,7 +38,7 @@ def get_config():
     cfg = VersioneerConfig()
     cfg.VCS = "git"
     cfg.style = "pep440"
-    cfg.tag_prefix = ""
+    cfg.tag_prefix = "v"
     cfg.parentdir_prefix = "nzpy_extended-"
     cfg.versionfile_source = "nzpy_extended/_version.py"
     cfg.verbose = False
@@ -107,6 +107,28 @@ def versions_from_parentdir(parentdir_prefix, root, verbose):
     return {"version": dirname[len(parentdir_prefix):],
             "full-revisionid": None,
             "dirty": False, "error": None}
+
+
+def versions_from_egg_info(root, verbose):
+    # PEP 517 isolated builds copy sdist contents into a generic temp
+    # directory (e.g. pip-req-build-*), so parentdir-based detection fails.
+    # The sdist still ships PKG-INFO with the correct release version.
+    for relpath in ("PKG-INFO", os.path.join("nzpy_extended.egg-info", "PKG-INFO")):
+        path = os.path.join(root, relpath)
+        if not os.path.isfile(path):
+            continue
+        version = None
+        with open(path, encoding="utf-8") as fp:
+            for line in fp:
+                if line.startswith("Version: "):
+                    version = line.split(": ", 1)[1].strip()
+                    break
+        if version:
+            if verbose:
+                print("picked version '%s' from %s" % (version, path))
+            return {"version": version, "full-revisionid": None,
+                    "dirty": False, "error": None}
+    raise NotThisMethod("no PKG-INFO version found")
 
 
 @register_vcs_handler("git", "get_keywords")
@@ -454,6 +476,11 @@ def get_versions():
     try:
         if cfg.parentdir_prefix:
             return versions_from_parentdir(cfg.parentdir_prefix, root, verbose)
+    except NotThisMethod:
+        pass
+
+    try:
+        return versions_from_egg_info(root, verbose)
     except NotThisMethod:
         pass
 

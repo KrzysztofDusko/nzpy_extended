@@ -78,4 +78,12 @@ jobs:
       - name: List distributions
         run: ls -la dist/
 
+      - name: Verify sdist installs with correct version
+        run: |
+          python -m venv /tmp/sdist-test-venv
+          /tmp/sdist-test-venv/bin/pip install --upgrade pip
+          SDIST=$(ls dist/*.tar.gz | head -1)
+          /tmp/sdist-test-venv/bin/pip install "$SDIST" --no-binary nzpy-extended
+          /tmp/sdist-test-venv/bin/python -c "import nzpy_extended; v=nzpy_extended.__version__; assert v and v != '0+unknown', v"
+
       - uses: pypa/gh-action-pypi-publish@release/v1
