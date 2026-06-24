@@ -701,6 +701,12 @@ class Connection:
                 old_cursor.cached_rows.clear()
                 old_cursor.generator = None
                 self._active_cursor = None
+        else:
+            stale_cursor = getattr(self, '_active_cursor', None)
+            if stale_cursor is not None:
+                stale_cursor.cached_rows.clear()
+                stale_cursor.generator = None
+                self._active_cursor = None
 
         if getattr(self, '_dirty_socket', False):
             await self._protocol._drain_socket()

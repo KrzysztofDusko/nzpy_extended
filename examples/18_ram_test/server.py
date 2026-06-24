@@ -2,8 +2,9 @@
 FastAPI server for RAM-leak investigation.
 
 Endpoints:
-  GET  /memory  – current RSS + gc object stats
-  POST /query   – execute SQL, return rows + RSS delta
+  GET  /memory        – current RSS + gc object stats
+  POST /query         – execute SQL, return rows + RSS delta
+  POST /query-cancel  – partial fetch then cancel, return RSS delta
 
 Env configuration:
   NZ_DEV_HOST, NZ_DEV_PORT, NZ_DEV_DB, NZ_DEV_USER, NZ_DEV_PASSWORD
@@ -207,6 +208,48 @@ async def run_query(body: dict[str, Any]) -> Any:
         "columns": columns,
         "row_count": row_count,
         "rows": jsonable,
+        "rss_mb_before": round(rss_before, 1),
+        "rss_mb_after": round(rss_after, 1),
+        "rss_mb_delta": round(rss_after - rss_before, 1),
+    })
+
+
+@app.post("/query-cancel")
+async def run_query_cancel(body: dict[str, Any]) -> Any:
+    sql = body.get("sql", "").strip()
+    if not sql:
+        raise HTTPException(400, "SQL query is empty")
+
+    fetch_rows = int(body.get("fetch_rows", 5))
+    if fetch_rows < 1:
+        raise HTTPException(400, "fetch_rows must be >= 1")
+
+    rss_before = _rss_mb()
+    conn = await _get_connection(_pool)
+    cur = None
+    fetch_rows_read = 0
+    try:
+        cur = conn.cursor()
+        await cur.execute(sql)
+        for _ in range(fetch_rows):
+            row = await cur.fetchone()
+            if row is None:
+                break
+            fetch_rows_read += 1
+        await conn.cancel()
+    finally:
+        if cur is not None:
+            await cur.close()
+        await _release_connection(_pool, conn)
+
+    rss_after = _rss_mb()
+    if _MODE_GC:
+        gc.collect()
+        rss_after = _rss_mb()
+
+    return JSONResponse(content={
+        "fetch_rows_requested": fetch_rows,
+        "fetch_rows_read": fetch_rows_read,
         "rss_mb_before": round(rss_before, 1),
         "rss_mb_after": round(rss_after, 1),
         "rss_mb_delta": round(rss_after - rss_before, 1),

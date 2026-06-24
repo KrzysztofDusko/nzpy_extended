@@ -14,6 +14,16 @@ from nzpy_extended.core import Connection
 
 from . import sync as _sync
 
+
+def _clear_stale_cursor(conn: Connection) -> None:
+    """Drop buffered rows left on a connection after partial read / cancel."""
+    stale = getattr(conn, "_active_cursor", None)
+    if stale is not None:
+        stale.cached_rows.clear()
+        stale.generator = None
+        conn._active_cursor = None
+
+
 _CONNECT_DEFAULTS: dict[str, Any] = {
     'unix_sock': None,
     'ssl': None,
@@ -235,6 +245,8 @@ class NzPool:
             except Exception:
                 pass
 
+        _clear_stale_cursor(conn)
+
         async with self._cond:
             if self._closed:
                 await conn.close()
@@ -428,6 +440,9 @@ class SyncPool:
                 )
             self._checked_out.discard(conn_id)
             pc = self._checked_out_pc.pop(conn_id)
+            async_conn = getattr(conn, "_conn", None)
+            if async_conn is not None:
+                _clear_stale_cursor(async_conn)
             if self._closed:
                 try:
                     conn.close()

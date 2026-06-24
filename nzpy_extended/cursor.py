@@ -243,10 +243,14 @@ class Cursor:
 
     async def close(self) -> None:
         generator = getattr(self, 'generator', None)
+        conn = self._c
         if generator is not None:
-            if self._c is not None:
-                await self._c.drain_protocol_generator(generator)
+            if conn is not None:
+                await conn.drain_protocol_generator(generator)
             self.generator = None
+        self.cached_rows.clear()
+        if conn is not None and getattr(conn, '_active_cursor', None) is self:
+            conn._active_cursor = None
         self._c = None
 
     def __aiter__(self) -> Cursor:

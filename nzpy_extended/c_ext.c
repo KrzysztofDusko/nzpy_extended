@@ -353,14 +353,21 @@ static PyObject* format_bigint(const char *data, int offset, int scale) {
         words[i] = read_u32_le(data + offset + i * 4);
 
     PyObject *val = PyLong_FromUnsignedLong(words[0]);
+    if (!val) return NULL;
+    PyObject *thirty_two = PyLong_FromLong(32);
+    if (!thirty_two) { Py_DECREF(val); return NULL; }
     for (int i = 1; i < 4; i++) {
-        PyObject *shifted = PyNumber_Lshift(val, PyLong_FromLong(32));
+        PyObject *shifted = PyNumber_Lshift(val, thirty_two);
         Py_DECREF(val);
+        if (!shifted) { Py_DECREF(thirty_two); return NULL; }
         PyObject *word_obj = PyLong_FromUnsignedLong(words[i]);
+        if (!word_obj) { Py_DECREF(shifted); Py_DECREF(thirty_two); return NULL; }
         val = PyNumber_Or(shifted, word_obj);
-        Py_DECREF(shifted); Py_DECREF(word_obj);
-        if (!val) return NULL;
+        Py_DECREF(shifted);
+        Py_DECREF(word_obj);
+        if (!val) { Py_DECREF(thirty_two); return NULL; }
     }
+    Py_DECREF(thirty_two);
 
     if (words[0] & 0x80000000) {
         PyObject *power = PyLong_FromString("340282366920938463463374607431768211456", NULL, 10);
